@@ -61,6 +61,10 @@ project(LLVM
 set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard to conform to")
 set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_CXX_EXTENSIONS NO)
+# by ruijief
+#set(CMAKE_EXE_LINKER_FLAGS ${CMAKE_EXE_LINKER_FLAGS} "-flto")
+#target_compile_options(LLVM PUBLIC ${CMAKE_C_FLAGS} -flto)
+# end by ruijief
 
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   message(STATUS "No build type selected, default to Debug")

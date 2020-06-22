@@ -8,6 +8,7 @@ LLVM_BUILD_OPT="build-optimized"
 LLVM_BUILD_HCS="build-hcs"
 LLVM_BUILD_HCS_PGO="build-hcs-instrumented"
 LLVM_BUILD_LTO="build-lto"
+LLVM_TEST="build-debug-instrumented"
 LLVM_MAKE_FLAGS="-j4"
 BENCHMARK_ROOT="/home/rjf/Projects/gsoc/benchmarks"
 QEMU_MAKE_FLAGS="-j4"
@@ -46,15 +47,16 @@ function clone_and_build_qemu_timed {
   mflags=$3
   echo "Building QEMU with cc="$cc" and cxx="$cxx" and make flags="$mflags
   cd $BENCHMARK_ROOT
-  rm -rf qemu/
-  git clone --depth=1 https://github.com/qemu/qemu
-  cd qemu/
+  rm -rf qemu2/
+  git clone --depth=1 https://github.com/qemu/qemu ./qemu2
+  cd qemu2/
   ./configure --cc=$cc --cxx=$cxx
   # disable build warnings; otherwise qemu build fails using newest edition of clang.
   sed -i "s/\-Werror//g" config-host.mak
   echo " ***** Building QEMU *****"
   time make $mflags
 }
+clone_and_build_qemu_timed $LLVM_ROOT/$LLVM_BUILD_OPT/bin/clang $LLVM_ROOT/$LLVM_BUILD_OPT/bin/clang++ 
 
 function cleanup_profiles {
   echo "Cleaning old profiles..."
@@ -94,17 +96,27 @@ function build_llvm_hcs_instrumented {
   make $LLVM_MAKE_FLAGS
 }
 
+function build_debug_instrumented {
+  echo "Building LLVM with PGO..."
+  mkdir $LLVM_ROOT/$LLVM_TEST
+  cd $LLVM_ROOT/$LLVM_TEST
+  cmake -DLLVM_ENABLE_PROJECTS="clang;lld;clang-tools-extra;compiler-rt" -G "Unix Makefiles" -DLLVM_BUILD_INSTRUMENTED=IR -DLLVM_BUILD_RUNTIME=No -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="-g" -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_COMPILER=$LLVM_ROOT/$LLVM_BUILD_BASE/bin/clang -DCMAKE_CXX_COMPILER=$LLVM_ROOT/$LLVM_BUILD_BASE/bin/clang++ ../llvm
+  make $LLVM_MAKE_FLAGS
+}
+
 
 echo "starting script..."
-build_llvm_base
-build_llvm_pgo
-cleanup_profiles
-clone_and_build_qemu
-convert_profiles
-build_llvm_optimized
-build_llvm_optimized_with_hcs
-echo "*** timed trial qemu, baseline (PGO only)"
-clone_and_build_qemu_timed $LLVM_ROOT/$LLVM_BUILD_OPT/bin/clang $LLVM_ROOT/$LLVM_BUILD_OPT/bin/clang++ "-j4"
-echo "*** timed trial qemu, HCS and PGO enabled"
-clone_and_build_qemu_timed $LLVM_ROOT/$LLVM_BUILD_HCS/bin/clang $LLVM_ROOT/$LLVM_BUILD_OPT/bin/clang++ "-j4"
+#build_llvm_base
+#build_llvm_pgo
+#cleanup_profiles
+#clone_and_build_qemu
+#convert_profiles
+#build_llvm_optimized
+#build_llvm_optimized_with_hcs
+#echo "*** timed trial qemu, baseline (PGO only)"
+#clone_and_build_qemu_timed $LLVM_ROOT/$LLVM_BUILD_OPT/bin/clang $LLVM_ROOT/$LLVM_BUILD_OPT/bin/clang++ "-j4"
+#echo "*** timed trial qemu, HCS and PGO enabled"
+#clone_and_build_qemu_timed $LLVM_ROOT/$LLVM_BUILD_HCS/bin/clang $LLVM_ROOT/$LLVM_BUILD_OPT/bin/clang++ "-j4"
 #build_llvm_hcs_instrumented
+#build_debug_instrumented
+

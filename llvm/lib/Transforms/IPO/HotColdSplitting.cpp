@@ -69,6 +69,7 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 
 #define DEBUG_TYPE "hotcoldsplit"
 
@@ -185,14 +186,20 @@ public:
 
 /// Check whether \p F is inherently cold.
 bool HotColdSplitting::isFunctionCold(const Function &F) const {
-  if (F.hasFnAttribute(Attribute::Cold))
+  if (F.hasFnAttribute(Attribute::Cold)) {
+    LLVM_DEBUG(dbgs() << "\n > # Function " << F.getName() << " has attribute cold.\n");
     return true;
+  }
 
-  if (F.getCallingConv() == CallingConv::Cold)
+  if (F.getCallingConv() == CallingConv::Cold) {
+    LLVM_DEBUG(dbgs() << "\n > # Function " << F.getName() << " has cold calling convention.\n");
     return true;
+  }
 
-  if (PSI->isFunctionEntryCold(&F))
+  if (PSI->isFunctionEntryCold(&F)) {
+    LLVM_DEBUG(dbgs() << "\n > # Function " << F.getName() << " has cold entry point according to ProfileSummaryInfo\n");
     return true;
+  }
 
   return false;
 }
@@ -648,19 +655,25 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
 bool HotColdSplitting::run(Module &M) {
   bool Changed = false;
   bool HasProfileSummary = (M.getProfileSummary(/* IsCS */ false) != nullptr);
+  LLVM_DEBUG(dbgs() << " > HotColdSplitting::run() called on " << M.getName() << "; HasProfileSummary=" << HasProfileSummary << "\n");
   for (auto It = M.begin(), End = M.end(); It != End; ++It) {
     Function &F = *It;
-
+    LLVM_DEBUG(dbgs() << " > - Iterating on function " << F.getName());
     // Do not touch declarations.
-    if (F.isDeclaration())
+    if (F.isDeclaration()) {
+      LLVM_DEBUG(dbgs() << " [declaration], next\n");  
       continue;
+    }
 
     // Do not modify `optnone` functions.
-    if (F.hasOptNone())
+    if (F.hasOptNone()) {
+      LLVM_DEBUG(dbgs() << " [optNone], next\n");
       continue;
+    }
 
     // Detect inherently cold functions and mark them as such.
     if (isFunctionCold(F)) {
+      LLVM_DEBUG(dbgs() << " [inherently cold], marking function cold...\n");
       Changed |= markFunctionCold(F);
       continue;
     }
@@ -673,14 +686,24 @@ bool HotColdSplitting::run(Module &M) {
     LLVM_DEBUG(llvm::dbgs() << "Outlining in " << F.getName() << "\n");
     Changed |= outlineColdRegions(F, HasProfileSummary);
   }
+  LLVM_DEBUG(dbgs() << " > HotColdSplitting::run(): Have we changed anything? " << Changed << "\n");
   return Changed;
 }
 
 bool HotColdSplittingLegacyPass::runOnModule(Module &M) {
-  if (skipModule(M))
+  /* ruijief: HCS is first called runOnModule, which runs on 
+   * a single compilation unit, and then runOnModule calls run. */
+  StringRef s = M.getName();
+  std::__cxx11::basic_string<char>  bs(s.str());
+  LLVM_DEBUG(dbgs() << "HotColdSplitting::runOnModule() called with module name " << bs << "\n");
+  
+  if (skipModule(M)) {
+    LLVM_DEBUG(dbgs() << "HotColdSplitting::runOnModule: current module skipped." << M.getName() << "\n");
     return false;
-  ProfileSummaryInfo *PSI =
-      &getAnalysis<ProfileSummaryInfoWrapperPass>().getPSI();
+  }
+
+  ProfileSummaryInfo *PSI (
+      &getAnalysis<ProfileSummaryInfoWrapperPass>().getPSI());
   auto GTTI = [this](Function &F) -> TargetTransformInfo & {
     return this->getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
   };
@@ -698,7 +721,7 @@ bool HotColdSplittingLegacyPass::runOnModule(Module &M) {
       return ACT->lookupAssumptionCache(F);
     return nullptr;
   };
-
+ LLVM_DEBUG(dbgs() << "HotColdSplitting::runOnModule: Running HotColdSplitting::run(" << M.getName() << ")\n");
   return HotColdSplitting(PSI, GBFI, GTTI, &GetORE, LookupAC).run(M);
 }
 

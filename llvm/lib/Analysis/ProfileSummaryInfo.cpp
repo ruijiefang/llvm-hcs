@@ -279,7 +279,7 @@ bool ProfileSummaryInfo::isFunctionEntryCold(const Function *F) const {
   // FIXME: The heuristic used below for determining coldness is based on
   // preliminary SPEC tuning for inliner. This will eventually be a
   // convenience method that calls isHotCount.
-  #define DEBUG_TYPE "ProfileSummaryInfo::isFunctionCold"
+  #define DEBUG_TYPE "hotcoldsplit"
   LLVM_DEBUG(dbgs() << "PSI: " << F->getName() << " has count " << FunctionCount.getCount() << "\n");
   LLVM_DEBUG(dbgs() << "ColdCountThreshold = " << ColdCountThreshold.getValue()  << "\n");
   #undef DEBUG_TYPE
@@ -349,6 +349,9 @@ bool ProfileSummaryInfo::isHotCount(uint64_t C) const {
 }
 
 bool ProfileSummaryInfo::isColdCount(uint64_t C) const {
+  #define DEBUG_TYPE "hotcoldsplit"
+  LLVM_DEBUG(dbgs() << "PSI::isColdCount: " << C << " ? " << ColdCountThreshold.getValue() << "\n");
+  #undef DEBUG_TYPE
   return ColdCountThreshold && C <= ColdCountThreshold.getValue();
 }
 

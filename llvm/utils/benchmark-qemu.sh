@@ -50,7 +50,7 @@ function clone_and_build_qemu_timed {
   rm -rf qemu2/
   git clone --depth=1 https://github.com/qemu/qemu ./qemu2
   cd qemu2/
-  ./configure --cc=$cc --cxx=$cxx
+  ./configure --cc=$cc --cxx=$cxx --extra-cflags="-g -fprofile-generate -fprofile-arcs"
   # disable build warnings; otherwise qemu build fails using newest edition of clang.
   sed -i "s/\-Werror//g" config-host.mak
   echo " ***** Building QEMU *****"

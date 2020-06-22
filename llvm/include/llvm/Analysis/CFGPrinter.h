@@ -29,6 +29,9 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/GraphWriter.h"
 
+/* ruijief: include std::set for coldblock/extractedblock names */
+#include <set>
+
 namespace llvm {
 class CFGViewerPass : public PassInfoMixin<CFGViewerPass> {
 public:
@@ -61,6 +64,31 @@ private:
   bool RawWeights;
 
 public:
+
+  // ruijief: augment DOTFuncInfo to take in a list of BB names
+  // that are outlined as cold. We implement this inelegantly as
+  // a public variable that can be modified externally for minimum
+  // effort and for preserving DOTFuncInfo compatibility.
+  //
+  // BBs that are marked will have bolded outline in the resulting
+  // graph, and BBs that are extracted will have bolded+grey outline
+  // in resulting graph.
+  //
+  // We use a std::set container for O(log |ColdBlockNames|) lookup
+  // in GraphWriter.h.
+  std::set<std::string> ColdBlockNames;
+  std::set<std::string> ExtractedBlockNames;
+
+  // helper method for querying if BB is in list of cold blocks marked by HCS
+  bool isBlockCold(const BasicBlock *BB) {
+    return this->ColdBlockNames.find(BB->getName().str()) != this->ColdBlockNames.end();
+  }
+
+  // helper method for querying if BB is in list of extracted blocks extracted by HCS
+  bool isBlockExtracted(const BasicBlock *BB) {
+    return this->ExtractedBlockNames.find(BB->getName().str()) != this->ExtractedBlockNames.end();
+  }
+
   DOTFuncInfo(const Function *F) : DOTFuncInfo(F, nullptr, nullptr, 0) {}
 
   DOTFuncInfo(const Function *F, const BlockFrequencyInfo *BFI,
@@ -271,9 +299,26 @@ struct DOTGraphTraits<DOTFuncInfo *> : public DefaultDOTGraphTraits {
   }
 
   std::string getNodeAttributes(const BasicBlock *Node, DOTFuncInfo *CFGInfo) {
+    /* ruijief: We can augment node attributes to display information 
+      about cold blocks here */
 
-    if (!CFGInfo->showHeatColors())
+    bool IsBlockCold = CFGInfo->isBlockCold(Node);
+    bool IsBlockExtracted = CFGInfo->isBlockExtracted(Node);
+    // move Attrs declaration here, since we always give certain attributes
+    std::string Attrs;
+
+    // If block is cold, mark it with bold 
+    if (IsBlockCold && !IsBlockExtracted) {
+      Attrs = "penwidth=3.0, color=\"red\"";
+    }
+
+    if (IsBlockExtracted) {
+      Attrs = "penwidth=3.0, style=\"filled\", color=\"red\", fillcolor=\"yellow\"";      
+    }
+
+    if (!CFGInfo->showHeatColors()) {
       return "";
+    }
 
     uint64_t Freq = CFGInfo->getFreq(Node);
     std::string Color = getHeatColor(Freq, CFGInfo->getMaxFreq());
@@ -281,7 +326,8 @@ struct DOTGraphTraits<DOTFuncInfo *> : public DefaultDOTGraphTraits {
                                 ? (getHeatColor(0))
                                 : (getHeatColor(1));
 
-    std::string Attrs = "color=\"" + EdgeColor + "ff\", style=filled," +
+    if (!IsBlockCold && !IsBlockExtracted) 
+      Attrs = "color=\"" + EdgeColor + "ff\", style=filled," +
                         " fillcolor=\"" + Color + "70\"";
     return Attrs;
   }

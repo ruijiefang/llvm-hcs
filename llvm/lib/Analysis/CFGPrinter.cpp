@@ -25,6 +25,9 @@
 #include "llvm/Support/FileSystem.h"
 #include <algorithm>
 
+// ruijief: include a set::set for recording coldblocknames
+#include <set>
+
 using namespace llvm;
 
 static cl::opt<std::string>

@@ -66,7 +66,11 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Utils/ValueMapper.h"
+/* ruijief: for printing extracted region */
+#include "llvm/Analysis/CFGPrinter.h"
+/* ruijief: std::set for storing cold block names. */
+#include <set>
+
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -210,25 +214,40 @@ bool HotColdSplitting::isFunctionCold(const Function &F) const {
 // Returns false if the function should not be considered for hot-cold split
 // optimization.
 bool HotColdSplitting::shouldOutlineFrom(const Function &F) const {
-  if (!F.hasFnAttribute(getHotColdSplittingAttrKind()))
+  /* ruijief: This if condition tests if -fsplit-cold-code is toggled in cc1 options for clang;
+              if cc1 option is toggled, then the hot-cold-split attribute will be added to the function in IR
+              and the function will be marked for HCS. In our case, we'd like to run everything with HCS enabled,
+              so here we can comment out this condition. */ 
+  /*
+  if (!F.hasFnAttribute(getHotColdSplittingAttrKind())) {
+    LLVM_DEBUG(dbgs() << " shouldOutline: Function " << F.getName() << " does not have HCS attribute, cannot outline.\n");
     return false;
-
-  if (F.hasFnAttribute(Attribute::AlwaysInline))
+  }
+  */
+  if (F.hasFnAttribute(Attribute::AlwaysInline)) {
+    LLVM_DEBUG(dbgs() << " shouldOutline: Function " << F.getName() << " has alwaysInline attribute cannot outline\n");
     return false;
-
-  if (F.hasFnAttribute(Attribute::NoInline))
+  }
+  
+  if (F.hasFnAttribute(Attribute::NoInline)) {
+    LLVM_DEBUG(dbgs() << " shouldOutline: Function" << F.getName() << " has NoInline attribute, cannot outline.\n");
     return false;
+  }
 
   // A function marked `noreturn` may contain unreachable terminators: these
   // should not be considered cold, as the function may be a trampoline.
-  if (F.hasFnAttribute(Attribute::NoReturn))
+  if (F.hasFnAttribute(Attribute::NoReturn)) {
+    LLVM_DEBUG(dbgs() << " shouldOutline: Function " << F.getName() << " has NoReturn attribute, cannot outline.\n");
     return false;
+  }
 
   if (F.hasFnAttribute(Attribute::SanitizeAddress) ||
       F.hasFnAttribute(Attribute::SanitizeHWAddress) ||
       F.hasFnAttribute(Attribute::SanitizeThread) ||
-      F.hasFnAttribute(Attribute::SanitizeMemory))
+      F.hasFnAttribute(Attribute::SanitizeMemory)) {
+    LLVM_DEBUG(dbgs() << " shouldOutline: Function " << F.getName() << " has sanitize attribute, cannot outline.\n");
     return false;
+  }
 
   return true;
 }
@@ -309,6 +328,32 @@ static int getOutliningPenalty(ArrayRef<BasicBlock *> Region,
   return Penalty;
 }
 
+Function *HotColdSplitting::printExtractColdRegion(
+    const BlockSequence &Region, const CodeExtractorAnalysisCache &CEAC,
+    DominatorTree &DT, BlockFrequencyInfo *BFI, TargetTransformInfo &TTI,
+    OptimizationRemarkEmitter &ORE, AssumptionCache *AC, unsigned Count) {
+  assert(!Region.empty());
+
+  // TODO: Pass BFI and BPI to update profile information.
+  CodeExtractor CE(Region, &DT, /* AggregateArgs */ false, /* BFI */ nullptr,
+                   /* BPI */ nullptr, AC, /* AllowVarArgs */ false,
+                   /* AllowAlloca */ false,
+                   /* Suffix */ "cold." + std::to_string(Count));
+
+  // Perform a simple cost/benefit analysis to decide whether or not to permit
+  // splitting.
+  SetVector<Value *> Inputs, Outputs, Sinks;
+  CE.findInputsOutputs(Inputs, Outputs, Sinks);
+  int OutliningBenefit = getOutliningBenefit(Region, TTI);
+  int OutliningPenalty =
+      getOutliningPenalty(Region, Inputs.size(), Outputs.size());
+  if (OutliningBenefit <= OutliningPenalty)
+    return nullptr;
+  
+  Function *OrigF = Region[0]->getParent();
+  return OrigF;
+}
+
 Function *HotColdSplitting::extractColdRegion(
     const BlockSequence &Region, const CodeExtractorAnalysisCache &CEAC,
     DominatorTree &DT, BlockFrequencyInfo *BFI, TargetTransformInfo &TTI,
@@ -329,11 +374,12 @@ Function *HotColdSplitting::extractColdRegion(
   int OutliningPenalty =
       getOutliningPenalty(Region, Inputs.size(), Outputs.size());
   LLVM_DEBUG(dbgs() << "Split profitability: benefit = " << OutliningBenefit
-                    << ", penalty = " << OutliningPenalty << "\n");
+                    << ", penalty = " << OutliningPenalty << "Delta=" << (OutliningBenefit - OutliningPenalty) << "\n");
   if (OutliningBenefit <= OutliningPenalty)
     return nullptr;
-
+  
   Function *OrigF = Region[0]->getParent();
+
   if (Function *OutF = CE.extractCodeRegion(CEAC)) {
     User *U = *OutF->user_begin();
     CallInst *CI = cast<CallInst>(U);
@@ -373,7 +419,7 @@ using BlockTy = std::pair<BasicBlock *, unsigned>;
 
 namespace {
 /// A maximal outlining region. This contains all blocks post-dominated by a
-/// sink block, the sink block itself, and all blocks dominated by the sink.
+// sink block, the sink block itself, and all blocks dominated by the sink.
 /// If sink-predecessors and sink-successors cannot be extracted in one region,
 /// the static constructor returns a list of suitable extraction regions.
 class OutliningRegion {
@@ -552,8 +598,51 @@ public:
 };
 } // namespace
 
+#include "llvm/Analysis/HeatUtils.h"
+
+// copied over from CFGPrinter.cpp and adjusted for our own use
+// we have to ensure that this is only run once in each unique function.
+static void writeCFGToDotFile(Function &F, BlockFrequencyInfo *BFI,
+                              std::set<std::string> ColdBlocks, 
+                              std::set<std::string> ExtractedBlocks,
+                              uint64_t MaxFreq,
+                              bool CFGOnly = false) {
+
+
+  BranchProbabilityInfo *BPI = nullptr; // Do not require BPI
+
+  // form file name
+  std::string Filename = "HCS_" + F.getName().str() + "_OUTPUT.dot";
+
+  errs() << "HCS: Writing '" << Filename << "'...";
+
+  std::error_code EC;
+  raw_fd_ostream File(Filename, EC, sys::fs::F_Text);
+
+  DOTFuncInfo CFGInfo(&F, BFI, BPI, MaxFreq);
+
+  // information for cold and extracted block names
+  CFGInfo.ColdBlockNames = ColdBlocks;
+  CFGInfo.ExtractedBlockNames = ExtractedBlocks;
+
+  CFGInfo.setHeatColors(true);
+  CFGInfo.setEdgeWeights(false); // by default
+  CFGInfo.setRawEdgeWeights(false); // by default
+
+  if (!EC)
+    WriteGraph(File, &CFGInfo, CFGOnly);
+  else
+    errs() << " HCS.writeCFGToDotFile: error opening file for writing!";
+  errs() << "\n";
+}
+
 bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   bool Changed = false;
+
+  // A non-working copy of the original function
+  // ValueToValueMapTy VMap;
+  // auto *FCopy = CloneFunction(&F, VMap);
+
 
   // The set of cold blocks.
   SmallPtrSet<BasicBlock *, 4> ColdBlocks;
@@ -580,6 +669,8 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   TargetTransformInfo &TTI = GetTTI(F);
   OptimizationRemarkEmitter &ORE = (*GetORE)(F);
   AssumptionCache *AC = LookupAC(F);
+  
+  LLVM_DEBUG(dbgs() << "Function entry count: " << F.getEntryCount().getCount() << "\n");
 
   // Find all cold regions.
   for (BasicBlock *BB : RPOT) {
@@ -589,12 +680,27 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
 
     bool Cold = (BFI && PSI->isColdBlock(BB, BFI)) ||
                 (EnableStaticAnalyis && unlikelyExecuted(*BB));
-    if (!Cold)
+    if (!Cold) {
+      LLVM_DEBUG(dbgs() << "Block " << BB->getName() << " is not cold.\n");
+      if (!BFI) {
+        LLVM_DEBUG(dbgs() << " Reason 1: Branch Frequency Information not available, so default to hot\n");
+      }
+      if (!PSI->isColdBlock(BB, BFI)) {
+        LLVM_DEBUG(dbgs() << " Reason 2: PSI thinks this isn't a cold block.\n");
+        auto Count = BFI->getBlockProfileCount(BB); 
+        LLVM_DEBUG(dbgs() << "  - why? Block BFI count = " << (Count && *Count) << " or DNE: " << (Count) << " but is greater than cold cound threshold\n");
+      }
+      if (!(EnableStaticAnalyis && unlikelyExecuted(*BB))) {
+        LLVM_DEBUG(dbgs() << " Reason 3: We think it's not unlikely to be executed.\n");
+      } 
       continue;
+    }
 
     LLVM_DEBUG({
-      dbgs() << "Found a cold block:\n";
+      dbgs() << "Found a cold block: ===============================================\n";
+      dbgs() << " Block Name: " << BB->getName() << " in function " << F.getName() << "\n";
       BB->dump();
+      dbgs() << "===================================================================\n";
     });
 
     if (!DT)
@@ -628,13 +734,21 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
     }
   }
 
-  if (OutliningWorklist.empty())
+  if (OutliningWorklist.empty()) {
     return Changed;
+  }
+
+  // otherwise, write extracted block info to DOT file before function gets changed.
+  for(const OutliningRegion& Region : OutliningWorklist) {
+    assert(!Region.empty() && "Empty outlining region in worklist");
+
+  }
 
   // Outline single-entry cold regions, splitting up larger regions as needed.
   unsigned OutlinedFunctionID = 1;
   // Cache and recycle the CodeExtractor analysis to avoid O(n^2) compile-time.
   CodeExtractorAnalysisCache CEAC(F);
+  
   do {
     OutliningRegion Region = OutliningWorklist.pop_back_val();
     assert(!Region.empty() && "Empty outlining region in worklist");
@@ -645,9 +759,10 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
         for (BasicBlock *BB : SubRegion)
           BB->dump();
       });
-
+      
       Function *Outlined = extractColdRegion(SubRegion, CEAC, *DT, BFI, TTI,
-                                             ORE, AC, OutlinedFunctionID);
+                                           ORE, AC, OutlinedFunctionID);
+      
       if (Outlined) {
         ++OutlinedFunctionID;
         Changed = true;
@@ -658,13 +773,176 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   return Changed;
 }
 
+bool HotColdSplitting::printOutlineColdRegions(Function &F, bool HasProfileSummary) {
+  bool Changed = false;
+
+  // A non-working copy of the original function
+  // ValueToValueMapTy VMap;
+  // auto *FCopy = CloneFunction(&F, VMap);
+
+
+  // The set of cold blocks.
+  SmallPtrSet<BasicBlock *, 4> ColdBlocks;
+
+  // The worklist of non-intersecting regions left to outline.
+  SmallVector<OutliningRegion, 2> OutliningWorklist;
+
+  // Set up an RPO traversal. Experimentally, this performs better (outlines
+  // more) than a PO traversal, because we prevent region overlap by keeping
+  // the first region to contain a block.
+  ReversePostOrderTraversal<Function *> RPOT(&F);
+
+  // Calculate domtrees lazily. This reduces compile-time significantly.
+  std::unique_ptr<DominatorTree> DT;
+  std::unique_ptr<PostDominatorTree> PDT;
+
+  // Calculate BFI lazily (it's only used to query ProfileSummaryInfo). This
+  // reduces compile-time significantly. TODO: When we *do* use BFI, we should
+  // be able to salvage its domtrees instead of recomputing them.
+  BlockFrequencyInfo *BFI = nullptr;
+  if (HasProfileSummary)
+    BFI = GetBFI(F);
+  uint64_t MaxFreq = getMaxFreq(F, BFI);
+
+  // ruijief: all extracted & cold blocks
+  std::set<std::string> ExtractedBlockNames; 
+  std::set<std::string> ColdBlockNames;
+
+  TargetTransformInfo &TTI = GetTTI(F);
+  OptimizationRemarkEmitter &ORE = (*GetORE)(F);
+  AssumptionCache *AC = LookupAC(F);
+  
+  // Find all cold regions.
+  for (BasicBlock *BB : RPOT) {
+    // This block is already part of some outlining region.
+    if (ColdBlocks.count(BB))
+      continue;
+
+    bool Cold = (BFI && PSI->isColdBlock(BB, BFI)) ||
+                (EnableStaticAnalyis && unlikelyExecuted(*BB));
+    if (!Cold) {
+      //LLVM_DEBUG(dbgs() << "Block " << BB->getName() << " is not cold.\n");
+      if (!BFI) {
+        //LLVM_DEBUG(dbgs() << " Reason 1: Branch Frequency Information not available, so default to hot\n");
+      }
+      if (!PSI->isColdBlock(BB, BFI)) {
+        //LLVM_DEBUG(dbgs() << " Reason 2: PSI thinks this isn't a cold block.\n");
+        //auto Count = BFI->getBlockProfileCount(BB); 
+        //LLVM_DEBUG(dbgs() << "  - why? Block BFI count = " << (Count && *Count) << " or DNE: " << (Count) << " but is greater than cold cound threshold\n");
+      }
+      if (!(EnableStaticAnalyis && unlikelyExecuted(*BB))) {
+        //LLVM_DEBUG(dbgs() << " Reason 3: We think it's not unlikely to be executed.\n");
+      } 
+      continue;
+    }
+
+//    LLVM_DEBUG({
+//      dbgs() << "Found a cold block: ===============================================\n";
+//      dbgs() << " Block Name: " << BB->getName() << " in function " << F.getName() << "\n";
+//      BB->dump();
+//      dbgs() << "===================================================================\n";
+//    });
+
+    // ruijief: add this cold block to the list of cold blocks.
+    ColdBlockNames.insert(BB->getName().str());
+
+    if (!DT)
+      DT = std::make_unique<DominatorTree>(F);
+    if (!PDT)
+      PDT = std::make_unique<PostDominatorTree>(F);
+
+    auto Regions = OutliningRegion::create(*BB, *DT, *PDT);
+    for (OutliningRegion &Region : Regions) {
+      if (Region.empty())
+        continue;
+
+      if (Region.isEntireFunctionCold()) {
+        //LLVM_DEBUG(dbgs() << "Entire function is cold\n");
+        return markFunctionCold(F);
+      }
+
+      // If this outlining region intersects with another, drop the new region.
+      //
+      // TODO: It's theoretically possible to outline more by only keeping the
+      // largest region which contains a block, but the extra bookkeeping to do
+      // this is tricky/expensive.
+      bool RegionsOverlap = any_of(Region.blocks(), [&](const BlockTy &Block) {
+        return !ColdBlocks.insert(Block.first).second;
+      });
+      if (RegionsOverlap)
+        continue;
+
+      OutliningWorklist.emplace_back(std::move(Region));
+      ++NumColdRegionsFound;
+    }
+  }
+
+//  LLVM_DEBUG(dbgs() << "Number of cold blocks in name set: " << ColdBlockNames.size() << "\n");
+  writeCFGToDotFile(F, BFI, ColdBlockNames, ExtractedBlockNames, MaxFreq);
+  if (OutliningWorklist.empty()) {
+    // Still call writeCFGToDotFile 
+    //FCopy->replaceAllUsesWith(&F);
+    //FCopy->eraseFromParent();
+    return Changed;
+  }
+
+  // otherwise, write extracted block info to DOT file before function gets changed.
+  for(const OutliningRegion& Region : OutliningWorklist) {
+    assert(!Region.empty() && "Empty outlining region in worklist");
+
+  }
+
+  // Outline single-entry cold regions, splitting up larger regions as needed.
+  unsigned OutlinedFunctionID = 1;
+  // Cache and recycle the CodeExtractor analysis to avoid O(n^2) compile-time.
+  CodeExtractorAnalysisCache CEAC(F);
+  
+  do {
+    OutliningRegion Region = OutliningWorklist.pop_back_val();
+    assert(!Region.empty() && "Empty outlining region in worklist");
+    do {
+      BlockSequence SubRegion = Region.takeSingleEntrySubRegion(*DT);
+   //   LLVM_DEBUG({
+   //     dbgs() << "Hot/cold splitting attempting to outline these blocks:\n";
+   //     for (BasicBlock *BB : SubRegion)
+   //       BB->dump();
+   //   });
+      
+      Function *Outlined = printExtractColdRegion(SubRegion, CEAC, *DT, BFI, TTI,
+                                           ORE, AC, OutlinedFunctionID);
+      
+      if (Outlined) {
+        ++OutlinedFunctionID;
+        Changed = true;
+      
+        /* ruijief: We write the entire outlined region to a dot file via GraphWriter */
+        // Since we've modified \p DOTFuncInfo as well, we can directly set the blocks inside 
+        // each subregion to be outlined. 
+
+        for(const BasicBlock *BB : SubRegion) {
+          ExtractedBlockNames.insert(BB->getName().str());
+        }
+      }
+    } while (!Region.empty());
+  } while (!OutliningWorklist.empty());
+
+  // Write CFG to DOT file.
+  // TODO: see if we only write Changed functions.
+  if (ColdBlockNames.size() > 0)
+    writeCFGToDotFile(F, BFI, ColdBlockNames, ExtractedBlockNames, MaxFreq);
+  //FCopy->replaceAllUsesWith(&F);
+  //FCopy->eraseFromParent();
+  return Changed;
+}
+
+
 bool HotColdSplitting::run(Module &M) {
   bool Changed = false;
   bool HasProfileSummary = (M.getProfileSummary(/* IsCS */ false) != nullptr);
   LLVM_DEBUG(dbgs() << " > HotColdSplitting::run() called on " << M.getName() << "; HasProfileSummary=" << HasProfileSummary << "\n");
   for (auto It = M.begin(), End = M.end(); It != End; ++It) {
     Function &F = *It;
-    LLVM_DEBUG(dbgs() << " > - Iterating on function " << F.getName());
+    LLVM_DEBUG(dbgs() << " > - Iterating on function " << F.getName() << "\n");
     // Do not touch declarations.
     if (F.isDeclaration()) {
       LLVM_DEBUG(dbgs() << " [declaration], next\n");  
@@ -690,6 +968,9 @@ bool HotColdSplitting::run(Module &M) {
     }
 
     LLVM_DEBUG(llvm::dbgs() << "Outlining in " << F.getName() << "\n");
+    // first pass, dump DOT figures
+    printOutlineColdRegions(F, HasProfileSummary);
+    // next, actually outline
     Changed |= outlineColdRegions(F, HasProfileSummary);
   }
   LLVM_DEBUG(dbgs() << " > HotColdSplitting::run(): Have we changed anything? " << Changed << "\n");

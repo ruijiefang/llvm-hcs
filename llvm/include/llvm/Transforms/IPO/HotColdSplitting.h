@@ -48,7 +48,16 @@ private:
   bool isFunctionCold(const Function &F) const;
   bool shouldOutlineFrom(const Function &F) const;
   bool outlineColdRegions(Function &F, bool HasProfileSummary);
+  /* ruijief: printOutlineColdRegions */
+  bool printOutlineColdRegions(Function &F, bool HasProfileSummary);
   Function *extractColdRegion(const BlockSequence &Region,
+                              const CodeExtractorAnalysisCache &CEAC,
+                              DominatorTree &DT, BlockFrequencyInfo *BFI,
+                              TargetTransformInfo &TTI,
+                              OptimizationRemarkEmitter &ORE,
+                              AssumptionCache *AC, unsigned Count);
+  /* ruijief: printExtractColdRegion */
+  Function *printExtractColdRegion(const BlockSequence &Region,
                               const CodeExtractorAnalysisCache &CEAC,
                               DominatorTree &DT, BlockFrequencyInfo *BFI,
                               TargetTransformInfo &TTI,

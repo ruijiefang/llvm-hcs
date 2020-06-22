@@ -208,6 +208,7 @@
 ; CHECK-POSTLINK-O-NEXT: Running pass: EliminateAvailableExternallyPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: ReversePostOrderFunctionAttrsPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}GlobalsAA
+; CHECK-POSTLINK-O-NEXT: Running pass: HotColdSplittingPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: ModuleToFunctionPassAdaptor<{{.*}}PassManager{{.*}}>
 ; CHECK-POSTLINK-O-NEXT: Starting llvm::Function pass manager run.
 ; CHECK-POSTLINK-O-NEXT: Running pass: Float2IntPass

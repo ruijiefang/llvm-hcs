@@ -91,6 +91,11 @@ static cl::opt<int>
                        cl::desc("Base penalty for splitting cold code (as a "
                                 "multiple of TCC_Basic)"));
 
+static cl::opt<int>
+    SplittingDelta("hotcoldsplit-delta", cl::init(5), cl::Hidden, 
+                       cl::desc("Allows blocks with penalty score larger than"
+                                " or equals benefit+delta to also be split."));
+
 namespace {
 // Same as blockEndsInUnreachable in CodeGen/BranchFolding.cpp. Do not modify
 // this function unless you modify the MBB version as well.
@@ -347,7 +352,7 @@ Function *HotColdSplitting::printExtractColdRegion(
   int OutliningBenefit = getOutliningBenefit(Region, TTI);
   int OutliningPenalty =
       getOutliningPenalty(Region, Inputs.size(), Outputs.size());
-  if (OutliningBenefit <= OutliningPenalty)
+  if (OutliningBenefit + SplittingDelta <= OutliningPenalty)
     return nullptr;
   
   Function *OrigF = Region[0]->getParent();
@@ -374,8 +379,9 @@ Function *HotColdSplitting::extractColdRegion(
   int OutliningPenalty =
       getOutliningPenalty(Region, Inputs.size(), Outputs.size());
   LLVM_DEBUG(dbgs() << "Split profitability: benefit = " << OutliningBenefit
-                    << ", penalty = " << OutliningPenalty << "Delta=" << (OutliningBenefit - OutliningPenalty) << "\n");
-  if (OutliningBenefit <= OutliningPenalty)
+                    << ", penalty = " << OutliningPenalty << " Delta=" << (OutliningBenefit - OutliningPenalty) 
+                    << " Allowance" << (0 - SplittingDelta) << "\n");
+  if (OutliningBenefit + SplittingDelta <= OutliningPenalty)
     return nullptr;
   
   Function *OrigF = Region[0]->getParent();

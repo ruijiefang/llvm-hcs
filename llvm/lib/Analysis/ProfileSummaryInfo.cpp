@@ -349,9 +349,9 @@ bool ProfileSummaryInfo::isHotCount(uint64_t C) const {
 }
 
 bool ProfileSummaryInfo::isColdCount(uint64_t C) const {
-  #define DEBUG_TYPE "hotcoldsplit"
-  LLVM_DEBUG(dbgs() << "PSI::isColdCount: " << C << " ? " << ColdCountThreshold.getValue() << "\n");
-  #undef DEBUG_TYPE
+  // #define DEBUG_TYPE "hotcoldsplit"
+  // LLVM_DEBUG(dbgs() << "PSI::isColdCount: " << C << " ? " << ColdCountThreshold.getValue() << "\n");
+  // #undef DEBUG_TYPE
   return ColdCountThreshold && C <= ColdCountThreshold.getValue();
 }
 

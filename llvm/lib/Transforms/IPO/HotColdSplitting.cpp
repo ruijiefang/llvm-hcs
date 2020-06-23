@@ -802,7 +802,9 @@ bool HotColdSplitting::printOutlineColdRegions(Function &F, bool HasProfileSumma
   BlockFrequencyInfo *BFI = nullptr;
   if (HasProfileSummary)
     BFI = GetBFI(F);
-  uint64_t MaxFreq = getMaxFreq(F, BFI);
+  uint64_t MaxFreq = 0;
+  if (BFI)
+    MaxFreq = getMaxFreq(F, BFI);
 
   // ruijief: all extracted & cold blocks
   std::set<std::string> ExtractedBlockNames; 
@@ -877,12 +879,13 @@ bool HotColdSplitting::printOutlineColdRegions(Function &F, bool HasProfileSumma
     }
   }
 
-//  LLVM_DEBUG(dbgs() << "Number of cold blocks in name set: " << ColdBlockNames.size() << "\n");
-  writeCFGToDotFile(F, BFI, ColdBlockNames, ExtractedBlockNames, MaxFreq);
+  LLVM_DEBUG(dbgs() << "Number of cold blocks in name set: " << ColdBlockNames.size() << "\n");
   if (OutliningWorklist.empty()) {
     // Still call writeCFGToDotFile 
     //FCopy->replaceAllUsesWith(&F);
     //FCopy->eraseFromParent();
+    if (ColdBlockNames.size() > 0)
+      writeCFGToDotFile(F, BFI, ColdBlockNames, ExtractedBlockNames, MaxFreq);
     return Changed;
   }
 

@@ -685,7 +685,7 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
       if (!BFI) {
         LLVM_DEBUG(dbgs() << " Reason 1: Branch Frequency Information not available, so default to hot\n");
       }
-      if (!PSI->isColdBlock(BB, BFI)) {
+      if (BFI && !PSI->isColdBlock(BB, BFI)) {
         LLVM_DEBUG(dbgs() << " Reason 2: PSI thinks this isn't a cold block.\n");
         auto Count = BFI->getBlockProfileCount(BB); 
         LLVM_DEBUG(dbgs() << "  - why? Block BFI count = " << (Count && *Count) << " or DNE: " << (Count) << " but is greater than cold cound threshold\n");
@@ -823,18 +823,6 @@ bool HotColdSplitting::printOutlineColdRegions(Function &F, bool HasProfileSumma
     bool Cold = (BFI && PSI->isColdBlock(BB, BFI)) ||
                 (EnableStaticAnalyis && unlikelyExecuted(*BB));
     if (!Cold) {
-      //LLVM_DEBUG(dbgs() << "Block " << BB->getName() << " is not cold.\n");
-      if (!BFI) {
-        //LLVM_DEBUG(dbgs() << " Reason 1: Branch Frequency Information not available, so default to hot\n");
-      }
-      if (!PSI->isColdBlock(BB, BFI)) {
-        //LLVM_DEBUG(dbgs() << " Reason 2: PSI thinks this isn't a cold block.\n");
-        //auto Count = BFI->getBlockProfileCount(BB); 
-        //LLVM_DEBUG(dbgs() << "  - why? Block BFI count = " << (Count && *Count) << " or DNE: " << (Count) << " but is greater than cold cound threshold\n");
-      }
-      if (!(EnableStaticAnalyis && unlikelyExecuted(*BB))) {
-        //LLVM_DEBUG(dbgs() << " Reason 3: We think it's not unlikely to be executed.\n");
-      } 
       continue;
     }
 

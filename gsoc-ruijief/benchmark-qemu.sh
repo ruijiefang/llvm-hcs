@@ -26,7 +26,7 @@ function clone_and_build_qemu_instrumented {
   echo "compiling qemu"
   git clone https://github.com/ruijiefang/qemu-x86_64-linux-benchmark ./qemu --depth=1
   cd ./qemu
-  ./configure --wno-error --cc=$LLVM_DIR/clang --cxx=$LLVM_DIR/clang++ --extra-cflags="-gline-tables-only -fprofile-generate -O2" --extra-cxxflags="-gline-tables-only -fprofile-generate -O2" --target-list="x86_64-linux-user,x86_64-softmmu"
+  ./configure --disable-werror --cc=$LLVM_DIR/clang --cxx=$LLVM_DIR/clang++ --extra-cflags="-gline-tables-only -fprofile-generate -O2" --extra-cxxflags="-gline-tables-only -fprofile-generate -O2" --target-list="x86_64-linux-user,x86_64-softmmu"
   make -j4
   echo "finished compiling qemu"
   cd ../

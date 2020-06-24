@@ -77,7 +77,8 @@
 
 #define PASS_NAME "Hot Cold Splitting"
 #define DEBUG_TYPE "hotcoldsplit"
-
+/* ruijief: a common "cold section" for all extracted functions. */
+#define COLD_SECTION "cold_section"
 STATISTIC(NumColdRegionsFound, "Number of cold regions found.");
 STATISTIC(NumColdRegionsOutlined, "Number of cold regions outlined.");
 
@@ -92,7 +93,7 @@ static cl::opt<int>
                                 "multiple of TCC_Basic)"));
 
 static cl::opt<int>
-    SplittingDelta("hotcoldsplit-delta", cl::init(5), cl::Hidden, 
+    SplittingDelta("hotcoldsplit-delta", cl::init(0), cl::Hidden, 
                        cl::desc("Allows blocks with penalty score larger than"
                                 " or equals benefit+delta to also be split."));
 
@@ -396,8 +397,10 @@ Function *HotColdSplitting::extractColdRegion(
     }
     CI->setIsNoInline();
 
+    /* ruijief: Place cold function in a different section. */
     if (OrigF->hasSection())
-      OutF->setSection(OrigF->getSection());
+      /* OutF->setSection(OrigF->getSection()); */
+      OutF->setSection(COLD_SECTION);
 
     markFunctionCold(*OutF, BFI != nullptr);
 

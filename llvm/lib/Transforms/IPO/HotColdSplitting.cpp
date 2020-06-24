@@ -614,7 +614,8 @@ static void writeCFGToDotFile(Function &F, BlockFrequencyInfo *BFI,
                               uint64_t MaxFreq,
                               bool CFGOnly = false) {
 
-
+  assert(BFI && "BFI is null");
+  LLVM_DEBUG(dbgs() << " > is BFI null? " << BFI);
   BranchProbabilityInfo *BPI = nullptr; // Do not require BPI
 
   // form file name
@@ -802,15 +803,17 @@ bool HotColdSplitting::printOutlineColdRegions(Function &F, bool HasProfileSumma
   std::unique_ptr<DominatorTree> DT;
   std::unique_ptr<PostDominatorTree> PDT;
 
+  // ruijief: We'll need BFI desperately when writing the graph out to a 
+  // dotfile, so always calculate BFI for this pass. BUT lazily computing BFI
+  // suffices for the next pass.
+  
   // Calculate BFI lazily (it's only used to query ProfileSummaryInfo). This
   // reduces compile-time significantly. TODO: When we *do* use BFI, we should
   // be able to salvage its domtrees instead of recomputing them.
   BlockFrequencyInfo *BFI = nullptr;
-  if (HasProfileSummary)
-    BFI = GetBFI(F);
-  uint64_t MaxFreq = 0;
-  if (BFI)
-    MaxFreq = getMaxFreq(F, BFI);
+  //if (HasProfileSummary)
+  BFI = GetBFI(F);
+  uint64_t MaxFreq = getMaxFreq(F, BFI);
 
   // ruijief: all extracted & cold blocks
   std::set<std::string> ExtractedBlockNames; 

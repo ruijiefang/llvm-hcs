@@ -36,6 +36,7 @@ sudo cset shield -c 1,2 -k on
 cd $POSTGRES_DIR
 make clean
 sudo cset shield --exec -- \
-	perf stat -o perf.log -v -r 6 \
+	perf stat -o perf.log -r 6 -e task-clock,context-switches,cpu-migrations,page-faults,cycles,instructions,branches,branch-misses,L1-icache-load-misses,icache.misses,icache.hit,icache.ifdata_stall,icache.ifetch_stall \
 	nice -n -20 ionice -c 2 -n 0 \
 	./execute.sh
+# task-clock,context-switches,cpu-migrations,page-faults,cycles,instructions,branches,branch-misses,L1-icache-load-misses,icache.misses,icache.hit,icache.ifdata_stall,icache.ifetch_stall

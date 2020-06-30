@@ -398,7 +398,7 @@ Function *HotColdSplitting::extractColdRegion(
     CI->setIsNoInline();
 
     /* ruijief: Place cold function in a different section. */
-    if (OrigF->hasSection())
+    /* if (OrigF->hasSection()) */
       /* OutF->setSection(OrigF->getSection()); */
       OutF->setSection(COLD_SECTION);
 

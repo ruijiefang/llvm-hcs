@@ -1,0 +1,7 @@
+int i = b, j = b + 1, k = b + 2;
+i += j;
+j -= k;
+k = k + i;
+i += j;
+j -= k;
+k = k + i;

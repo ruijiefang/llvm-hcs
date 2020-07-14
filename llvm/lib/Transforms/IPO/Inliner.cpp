@@ -63,6 +63,7 @@
 #include "llvm/Transforms/Utils/ImportedFunctionsInliningStatistics.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
+#include "llvm/Transforms/IPO/HotColdSplitting.h"
 #include <algorithm>
 #include <cassert>
 #include <functional>
@@ -1046,12 +1047,16 @@ ModuleInlinerWrapperPass::ModuleInlinerWrapperPass(InlineParams Params,
   // into the callers so that our optimizations can reflect that.
   // For PreLinkThinLTO pass, we disable hot-caller heuristic for sample PGO
   // because it makes profile annotation in the backend inaccurate.
+  LLVM_DEBUG(dbgs() << "ModuleInliner: run() called\n");
+  MPM.addPass(HotColdSplittingPass());
   PM.addPass(InlinerPass());
 }
 
 PreservedAnalyses ModuleInlinerWrapperPass::run(Module &M,
                                                 ModuleAnalysisManager &MAM) {
+   
   auto &IAA = MAM.getResult<InlineAdvisorAnalysis>(M);
+
   if (!IAA.tryCreate(Params, Mode)) {
     M.getContext().emitError(
         "Could not setup Inlining Advisor for the requested "

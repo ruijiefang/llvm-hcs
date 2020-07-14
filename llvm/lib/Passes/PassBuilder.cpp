@@ -727,18 +727,39 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   return FPM;
 }
 
+#include <iostream>
 void PassBuilder::addPGOInstrPasses(ModulePassManager &MPM, bool DebugLogging,
                                     PassBuilder::OptimizationLevel Level,
                                     bool RunProfileGen, bool IsCS,
                                     std::string ProfileFile,
                                     std::string ProfileRemappingFile) {
   assert(Level != OptimizationLevel::O0 && "Not expecting O0 here!");
+
+  std::cout << "addPGOInstrPasses" << std::endl;
+
+  if (!RunProfileGen) {
+    assert(!ProfileFile.empty() && "Profile use expecting a profile file!");
+    MPM.addPass(PGOInstrumentationUse(ProfileFile, ProfileRemappingFile, IsCS));
+    // Cache ProfileSummaryAnalysis once to avoid the potential need to insert
+    // RequireAnalysisPass for PSI before subsequent non-module passes.
+    MPM.addPass(RequireAnalysisPass<ProfileSummaryAnalysis, Module>());
+    MPM.addPass(RequireAnalysisPass<BranchProbabilityAnalysis, Module>());
+    return;
+  }
+
+  // Perform PGO instrumentation.
+  MPM.addPass(PGOInstrumentationGen(IsCS));
+
+    MPM.addPass(RequireAnalysisPass<ProfileSummaryAnalysis, Module>());
+  MPM.addPass(RequireAnalysisPass<BranchProbabilityAnalysis, Module>());
+  
   // Generally running simplification passes and the inliner with an high
   // threshold results in smaller executables, but there may be cases where
   // the size grows, so let's be conservative here and skip this simplification
   // at -Os/Oz. We will not do this  inline for context sensistive PGO (when
   // IsCS is true).
-  if (!Level.isOptimizingForSize() && !IsCS) {
+ // if (!Level.isOptimizingForSize() && !IsCS) {
+   {
     InlineParams IP;
 
     IP.DefaultThreshold = PreInlineThreshold;
@@ -765,20 +786,8 @@ void PassBuilder::addPGOInstrPasses(ModulePassManager &MPM, bool DebugLogging,
     // dead code. Instrumentation can end up keeping dead code around and
     // dramatically increase code size.
     MPM.addPass(GlobalDCEPass());
-  }
-
-  if (!RunProfileGen) {
-    assert(!ProfileFile.empty() && "Profile use expecting a profile file!");
-    MPM.addPass(PGOInstrumentationUse(ProfileFile, ProfileRemappingFile, IsCS));
-    // Cache ProfileSummaryAnalysis once to avoid the potential need to insert
-    // RequireAnalysisPass for PSI before subsequent non-module passes.
-    MPM.addPass(RequireAnalysisPass<ProfileSummaryAnalysis, Module>());
-    return;
-  }
-
-  // Perform PGO instrumentation.
-  MPM.addPass(PGOInstrumentationGen(IsCS));
-
+ // }
+   }
   FunctionPassManager FPM;
   FPM.addPass(createFunctionToLoopPassAdaptor(
       LoopRotatePass(), EnableMSSALoopDependency, DebugLogging));
@@ -1164,8 +1173,8 @@ ModulePassManager PassBuilder::buildModuleOptimizationPipeline(
   // Split out cold code. Splitting is done late to avoid hiding context from
   // other optimizations and inadvertently regressing performance. The tradeoff
   // is that this has a higher code size cost than splitting early.
-  if (!LTOPreLink)
-    MPM.addPass(HotColdSplittingPass());
+  // if (!LTOPreLink)
+  //  MPM.addPass(HotColdSplittingPass());
 
   // LoopSink pass sinks instructions hoisted by LICM, which serves as a
   // canonicalization pass that enables other optimizations. As a result,

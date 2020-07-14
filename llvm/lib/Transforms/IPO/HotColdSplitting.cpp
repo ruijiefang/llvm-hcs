@@ -646,6 +646,7 @@ static void writeCFGToDotFile(Function &F, BlockFrequencyInfo *BFI,
   errs() << "\n";
 }
 
+#include <iostream>
 bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   bool Changed = false;
 
@@ -712,6 +713,8 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
       BB->dump();
       dbgs() << "===================================================================\n";
     });
+
+    std::cout << "HCS: Found 1 cold block in function " << F.getName().str() << std::endl;
 
     if (!DT)
       DT = std::make_unique<DominatorTree>(F);
@@ -938,7 +941,7 @@ bool HotColdSplitting::printOutlineColdRegions(Function &F, bool HasProfileSumma
   return Changed;
 }
 
-
+//
 bool HotColdSplitting::run(Module &M) {
   bool Changed = false;
   bool HasProfileSummary = (M.getProfileSummary(/* IsCS */ false) != nullptr);
@@ -972,7 +975,8 @@ bool HotColdSplitting::run(Module &M) {
 
     LLVM_DEBUG(llvm::dbgs() << "Outlining in " << F.getName() << "\n");
     // first pass, dump DOT figures
-    printOutlineColdRegions(F, HasProfileSummary);
+    // EDIT: don't dump anymore
+    // printOutlineColdRegions(F, HasProfileSummary);
     // next, actually outline
     Changed |= outlineColdRegions(F, HasProfileSummary);
   }

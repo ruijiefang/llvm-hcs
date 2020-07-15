@@ -1,3 +1,4 @@
+#define DEBUG_TYPE "hotcoldsplit"
 //===- HotColdSplitting.cpp -- Outline Cold Regions -------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -24,7 +25,6 @@
 /// TODO: Reorder outlined functions.
 ///
 //===----------------------------------------------------------------------===//
-
 #include "llvm/Transforms/IPO/HotColdSplitting.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallVector.h"
@@ -76,12 +76,12 @@
 #include <cstdio>
 
 #define PASS_NAME "Hot Cold Splitting"
-#define DEBUG_TYPE "hotcoldsplit"
+
 /* ruijief: a common "cold section" for all extracted functions. */
 #define COLD_SECTION "cold_section"
-STATISTIC(NumColdRegionsFound, "Number of cold regions found.");
-STATISTIC(NumColdRegionsOutlined, "Number of cold regions outlined.");
-
+ALWAYS_ENABLED_STATISTIC(NumColdRegionsFound, "Number of cold regions found.");
+ALWAYS_ENABLED_STATISTIC(NumColdRegionsOutlined, "Number of cold regions outlined.");
+ALWAYS_ENABLED_STATISTIC(NumSmallDeltaBlocks, "HCS Number of penalized blocks with 0 <= penalty-benefit <= 5");
 using namespace llvm;
 
 static cl::opt<bool> EnableStaticAnalyis("hot-cold-static-analysis",
@@ -382,8 +382,12 @@ Function *HotColdSplitting::extractColdRegion(
   LLVM_DEBUG(dbgs() << "Split profitability: benefit = " << OutliningBenefit
                     << ", penalty = " << OutliningPenalty << " Delta=" << (OutliningBenefit - OutliningPenalty) 
                     << " Allowance" << (0 - SplittingDelta) << "\n");
-  if (OutliningBenefit + SplittingDelta <= OutliningPenalty)
+  if (OutliningBenefit + SplittingDelta <= OutliningPenalty) {
+    if (OutliningPenalty - OutliningBenefit >= 0 && 
+        OutliningPenalty - OutliningBenefit <= 5)
+        ++NumSmallDeltaBlocks;
     return nullptr;
+  }
   
   Function *OrigF = Region[0]->getParent();
 
@@ -981,6 +985,11 @@ bool HotColdSplitting::run(Module &M) {
     Changed |= outlineColdRegions(F, HasProfileSummary);
   }
   LLVM_DEBUG(dbgs() << " > HotColdSplitting::run(): Have we changed anything? " << Changed << "\n");
+  unsigned VNumColdRegions = NumColdRegionsFound.getValue();
+  unsigned VNumExtractedRegions = NumColdRegionsOutlined.getValue();
+  unsigned VNumSmallBlocks = NumSmallDeltaBlocks.getValue();
+  printf("HotColdSplitting(%s): #ColdRegions=%u #ExtractedRegions=%u #SmallPenaltyBlocks=%u\n", 
+    M.getName().str().c_str(), VNumColdRegions, VNumExtractedRegions, VNumSmallBlocks);
   return Changed;
 }
 

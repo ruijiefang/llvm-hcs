@@ -735,6 +735,9 @@ void PassBuilder::addPGOInstrPasses(ModulePassManager &MPM, bool DebugLogging,
                                     std::string ProfileRemappingFile) {
   assert(Level != OptimizationLevel::O0 && "Not expecting O0 here!");
 
+  bool HasSampleProfile = PGOOpt && (PGOOpt->Action == PGOOptions::SampleUse 
+                                     || PGOOpt->Action == PGOOptions::IRUse);
+
   std::cout << "addPGOInstrPasses" << std::endl;
 
   if (!RunProfileGen) {
@@ -768,7 +771,7 @@ void PassBuilder::addPGOInstrPasses(ModulePassManager &MPM, bool DebugLogging,
     // FIXME: this comment is cargo culted from the old pass manager, revisit).
     IP.HintThreshold = 325;
     ModuleInlinerWrapperPass MIWP(IP, DebugLogging, 
-        InliningAdvisorMode::Default, 0, true);
+        InliningAdvisorMode::Default, 0, HasSampleProfile);
     CGSCCPassManager &CGPipeline = MIWP.getPM();
 
     FunctionPassManager FPM;
@@ -836,13 +839,16 @@ getInlineParamsFromOptLevel(PassBuilder::OptimizationLevel Level) {
 ModuleInlinerWrapperPass
 PassBuilder::buildInlinerPipeline(OptimizationLevel Level, ThinLTOPhase Phase,
                                   bool DebugLogging) {
+  bool HasSampleProfile = PGOOpt && (PGOOpt->Action == PGOOptions::SampleUse 
+                                     || PGOOpt->Action == PGOOptions::IRUse);
+
   InlineParams IP = getInlineParamsFromOptLevel(Level);
   if (Phase == PassBuilder::ThinLTOPhase::PreLink && PGOOpt &&
       PGOOpt->Action == PGOOptions::SampleUse)
     IP.HotCallSiteThreshold = 0;
 
   ModuleInlinerWrapperPass MIWP(IP, DebugLogging, UseInlineAdvisor,
-                                MaxDevirtIterations, (bool) PGOOpt);
+                                MaxDevirtIterations, HasSampleProfile);
   
   // Require the GlobalsAA analysis for the module so we can query it within
   // the CGSCC pipeline.

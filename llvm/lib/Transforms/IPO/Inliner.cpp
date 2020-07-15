@@ -1042,7 +1042,8 @@ PreservedAnalyses InlinerPass::run(LazyCallGraph::SCC &InitialC,
 ModuleInlinerWrapperPass::ModuleInlinerWrapperPass(InlineParams Params,
                                                    bool Debugging,
                                                    InliningAdvisorMode Mode,
-                                                   unsigned MaxDevirtIterations)
+                                                   unsigned MaxDevirtIterations, 
+                                                   bool SplitBeforeInlining)
     : Params(Params), Mode(Mode), MaxDevirtIterations(MaxDevirtIterations),
       PM(Debugging), MPM(Debugging) {
   // Run the inliner first. The theory is that we are walking bottom-up and so
@@ -1051,7 +1052,11 @@ ModuleInlinerWrapperPass::ModuleInlinerWrapperPass(InlineParams Params,
   // For PreLinkThinLTO pass, we disable hot-caller heuristic for sample PGO
   // because it makes profile annotation in the backend inaccurate.
   LLVM_DEBUG(dbgs() << "ModuleInliner: run() called\n");
-  MPM.addPass(HotColdSplittingPass());
+  
+  // ruijief: if SplitBeforeInlining = true, trigger HCS before inliner pass.
+  if (SplitBeforeInlining)
+    MPM.addPass(HotColdSplittingPass());
+  
   PM.addPass(InlinerPass());
 }
 

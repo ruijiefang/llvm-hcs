@@ -767,7 +767,8 @@ void PassBuilder::addPGOInstrPasses(ModulePassManager &MPM, bool DebugLogging,
     // This should probably be lowered after performance testing.
     // FIXME: this comment is cargo culted from the old pass manager, revisit).
     IP.HintThreshold = 325;
-    ModuleInlinerWrapperPass MIWP(IP, DebugLogging);
+    ModuleInlinerWrapperPass MIWP(IP, DebugLogging, 
+        InliningAdvisorMode::Default, 0, true);
     CGSCCPassManager &CGPipeline = MIWP.getPM();
 
     FunctionPassManager FPM;
@@ -841,8 +842,8 @@ PassBuilder::buildInlinerPipeline(OptimizationLevel Level, ThinLTOPhase Phase,
     IP.HotCallSiteThreshold = 0;
 
   ModuleInlinerWrapperPass MIWP(IP, DebugLogging, UseInlineAdvisor,
-                                MaxDevirtIterations);
-
+                                MaxDevirtIterations, (bool) PGOOpt);
+  
   // Require the GlobalsAA analysis for the module so we can query it within
   // the CGSCC pipeline.
   MIWP.addRequiredModuleAnalysis<GlobalsAA>();

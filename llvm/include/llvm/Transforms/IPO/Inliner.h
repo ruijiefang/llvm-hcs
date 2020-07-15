@@ -122,7 +122,8 @@ public:
   ModuleInlinerWrapperPass(
       InlineParams Params = getInlineParams(), bool Debugging = false,
       InliningAdvisorMode Mode = InliningAdvisorMode::Default,
-      unsigned MaxDevirtIterations = 0);
+      unsigned MaxDevirtIterations = 0, 
+      bool SplitBeforeInlining = false);
   ModuleInlinerWrapperPass(ModuleInlinerWrapperPass &&Arg) = default;
 
   PreservedAnalyses run(Module &, ModuleAnalysisManager &);

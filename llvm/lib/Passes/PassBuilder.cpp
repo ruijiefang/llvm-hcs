@@ -743,15 +743,14 @@ void PassBuilder::addPGOInstrPasses(ModulePassManager &MPM, bool DebugLogging,
     // Cache ProfileSummaryAnalysis once to avoid the potential need to insert
     // RequireAnalysisPass for PSI before subsequent non-module passes.
     MPM.addPass(RequireAnalysisPass<ProfileSummaryAnalysis, Module>());
-    MPM.addPass(RequireAnalysisPass<BranchProbabilityAnalysis, Module>());
+    //MPM.addPass(RequireAnalysisPass<Branc, Module>());
+
     return;
   }
 
   // Perform PGO instrumentation.
   MPM.addPass(PGOInstrumentationGen(IsCS));
-
-    MPM.addPass(RequireAnalysisPass<ProfileSummaryAnalysis, Module>());
-  MPM.addPass(RequireAnalysisPass<BranchProbabilityAnalysis, Module>());
+  MPM.addPass(RequireAnalysisPass<ProfileSummaryAnalysis, Module>());
   
   // Generally running simplification passes and the inliner with an high
   // threshold results in smaller executables, but there may be cases where

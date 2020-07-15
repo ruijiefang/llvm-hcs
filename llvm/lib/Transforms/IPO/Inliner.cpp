@@ -72,6 +72,9 @@
 #include <utility>
 #include <vector>
 
+#include "llvm/Analysis/BranchProbabilityInfo.h"
+#include "llvm/Analysis/ProfileSummaryInfo.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "inline"

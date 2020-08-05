@@ -86,15 +86,16 @@ static cl::opt<int>
                        cl::desc("Base penalty for splitting cold code (as a "
                                 "multiple of TCC_Basic)"));
 
-static cl::opt<bool>
-    EnableColdSection("enable-cold-section", cl::init(false), cl::Hidden,
-                      cl::desc("Set to true for splitting cold functions into"
-                               " separate cold region."));
+static cl::opt<bool> EnableColdSection(
+    "enable-cold-section", cl::init(false), cl::Hidden,
+    cl::desc("Enable placement of extracted cold functions"
+             " into a separate section after hot-cold splitting."));
 
 static cl::opt<std::string>
     ColdSectionName("hotcoldsplit-cold-section-name", cl::init("__llvm_cold"),
                     cl::Hidden,
-                    cl::desc("Cold section name for section splitting"));
+                    cl::desc("Name for the section containing cold functions "
+                             "extracted by hot-cold splitting."));
 
 namespace {
 // Same as blockEndsInUnreachable in CodeGen/BranchFolding.cpp. Do not modify

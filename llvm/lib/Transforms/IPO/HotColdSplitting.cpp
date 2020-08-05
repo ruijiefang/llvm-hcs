@@ -69,6 +69,7 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
+#include <string>
 
 #define DEBUG_TYPE "hotcoldsplit"
 
@@ -90,7 +91,7 @@ static cl::opt<bool>
                       cl::desc("Set to true for splitting cold functions into"
                                " separate cold region."));
 
-static cl::opt<StringRef>
+static cl::opt<std::string>
     ColdSectionName("hotcoldsplit-cold-section-name", cl::init("__llvm_cold"),
                     cl::Hidden,
                     cl::desc("Cold section name for section splitting"));

@@ -17,8 +17,8 @@
 ; USE: Running pass: PGOMemOPSizeOpt
 ; USE_POST_LINK: Running pass: PGOIndirectCallPromotion
 ; USE_POST_LINK: Running pass: PGOMemOPSizeOpt
-; SAMPLE_USE_O: Running pass: ModuleToFunctionPassAdaptor<{{.*}}AddDiscriminatorsPass{{.*}}>
-; SAMPLE_USE_PRE_LINK: Running pass: ModuleToFunctionPassAdaptor<{{.*}}AddDiscriminatorsPass{{.*}}>
+; SAMPLE_USE_O: Running pass: AddDiscriminatorsPass
+; SAMPLE_USE_PRE_LINK: Running pass: AddDiscriminatorsPass
 ; SAMPLE_USE: Running pass: SimplifyCFGPass
 ; SAMPLE_USE: Running pass: SROA
 ; SAMPLE_USE: Running pass: EarlyCSEPass

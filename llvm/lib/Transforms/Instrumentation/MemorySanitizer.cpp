@@ -153,6 +153,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
@@ -572,9 +573,6 @@ private:
   /// uninitialized value and returns an updated origin id encoding this info.
   FunctionCallee MsanChainOriginFn;
 
-  /// Run-time helper that paints an origin over a region.
-  FunctionCallee MsanSetOriginFn;
-
   /// MSan runtime replacements for memmove, memcpy and memset.
   FunctionCallee MemmoveFn, MemcpyFn, MemsetFn;
 
@@ -853,9 +851,6 @@ void MemorySanitizer::initializeCallbacks(Module &M) {
   // instrumentation.
   MsanChainOriginFn = M.getOrInsertFunction(
     "__msan_chain_origin", IRB.getInt32Ty(), IRB.getInt32Ty());
-  MsanSetOriginFn =
-      M.getOrInsertFunction("__msan_set_origin", IRB.getVoidTy(),
-                            IRB.getInt8PtrTy(), IntptrTy, IRB.getInt32Ty());
   MemmoveFn = M.getOrInsertFunction(
     "__msan_memmove", IRB.getInt8PtrTy(), IRB.getInt8PtrTy(),
     IRB.getInt8PtrTy(), IntptrTy);
@@ -1149,36 +1144,30 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     const DataLayout &DL = F.getParent()->getDataLayout();
     const Align OriginAlignment = std::max(kMinOriginAlignment, Alignment);
     unsigned StoreSize = DL.getTypeStoreSize(Shadow->getType());
-    if (Shadow->getType()->isArrayTy()) {
-      paintOrigin(IRB, updateOrigin(Origin, IRB), OriginPtr, StoreSize,
-                  OriginAlignment);
-    } else {
-      Value *ConvertedShadow = convertShadowToScalar(Shadow, IRB);
-      if (auto *ConstantShadow = dyn_cast<Constant>(ConvertedShadow)) {
-        if (ClCheckConstantShadow && !ConstantShadow->isZeroValue())
-          paintOrigin(IRB, updateOrigin(Origin, IRB), OriginPtr, StoreSize,
-                      OriginAlignment);
-        return;
-      }
-
-      unsigned TypeSizeInBits =
-          DL.getTypeSizeInBits(ConvertedShadow->getType());
-      unsigned SizeIndex = TypeSizeToSizeIndex(TypeSizeInBits);
-      if (AsCall && SizeIndex < kNumberOfAccessSizes && !MS.CompileKernel) {
-        FunctionCallee Fn = MS.MaybeStoreOriginFn[SizeIndex];
-        Value *ConvertedShadow2 = IRB.CreateZExt(
-            ConvertedShadow, IRB.getIntNTy(8 * (1 << SizeIndex)));
-        IRB.CreateCall(Fn, {ConvertedShadow2,
-                            IRB.CreatePointerCast(Addr, IRB.getInt8PtrTy()),
-                            Origin});
-      } else {
-        Value *Cmp = convertToBool(ConvertedShadow, IRB, "_mscmp");
-        Instruction *CheckTerm = SplitBlockAndInsertIfThen(
-            Cmp, &*IRB.GetInsertPoint(), false, MS.OriginStoreWeights);
-        IRBuilder<> IRBNew(CheckTerm);
-        paintOrigin(IRBNew, updateOrigin(Origin, IRBNew), OriginPtr, StoreSize,
+    Value *ConvertedShadow = convertShadowToScalar(Shadow, IRB);
+    if (auto *ConstantShadow = dyn_cast<Constant>(ConvertedShadow)) {
+      if (ClCheckConstantShadow && !ConstantShadow->isZeroValue())
+        paintOrigin(IRB, updateOrigin(Origin, IRB), OriginPtr, StoreSize,
                     OriginAlignment);
-      }
+      return;
+    }
+
+    unsigned TypeSizeInBits = DL.getTypeSizeInBits(ConvertedShadow->getType());
+    unsigned SizeIndex = TypeSizeToSizeIndex(TypeSizeInBits);
+    if (AsCall && SizeIndex < kNumberOfAccessSizes && !MS.CompileKernel) {
+      FunctionCallee Fn = MS.MaybeStoreOriginFn[SizeIndex];
+      Value *ConvertedShadow2 =
+          IRB.CreateZExt(ConvertedShadow, IRB.getIntNTy(8 * (1 << SizeIndex)));
+      IRB.CreateCall(Fn,
+                     {ConvertedShadow2,
+                      IRB.CreatePointerCast(Addr, IRB.getInt8PtrTy()), Origin});
+    } else {
+      Value *Cmp = convertToBool(ConvertedShadow, IRB, "_mscmp");
+      Instruction *CheckTerm = SplitBlockAndInsertIfThen(
+          Cmp, &*IRB.GetInsertPoint(), false, MS.OriginStoreWeights);
+      IRBuilder<> IRBNew(CheckTerm);
+      paintOrigin(IRBNew, updateOrigin(Origin, IRBNew), OriginPtr, StoreSize,
+                  OriginAlignment);
     }
   }
 
@@ -1410,12 +1399,31 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     return Aggregator;
   }
 
+  // Extract combined shadow of array elements
+  Value *collapseArrayShadow(ArrayType *Array, Value *Shadow,
+                             IRBuilder<> &IRB) {
+    if (!Array->getNumElements())
+      return IRB.getIntN(/* width */ 1, /* value */ 0);
+
+    Value *FirstItem = IRB.CreateExtractValue(Shadow, 0);
+    Value *Aggregator = convertShadowToScalar(FirstItem, IRB);
+
+    for (unsigned Idx = 1; Idx < Array->getNumElements(); Idx++) {
+      Value *ShadowItem = IRB.CreateExtractValue(Shadow, Idx);
+      Value *ShadowInner = convertShadowToScalar(ShadowItem, IRB);
+      Aggregator = IRB.CreateOr(Aggregator, ShadowInner);
+    }
+    return Aggregator;
+  }
+
   /// Convert a shadow value to it's flattened variant. The resulting
   /// shadow may not necessarily have the same bit width as the input
   /// value, but it will always be comparable to zero.
   Value *convertShadowToScalar(Value *V, IRBuilder<> &IRB) {
     if (StructType *Struct = dyn_cast<StructType>(V->getType()))
       return collapseStructShadow(Struct, V, IRB);
+    if (ArrayType *Array = dyn_cast<ArrayType>(V->getType()))
+      return collapseArrayShadow(Array, V, IRB);
     Type *Ty = V->getType();
     Type *NoVecTy = getShadowTyNoVec(Ty);
     if (Ty == NoVecTy) return V;
@@ -1765,10 +1773,10 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     if (!InsertChecks) return;
 #ifndef NDEBUG
     Type *ShadowTy = Shadow->getType();
-    assert(
-        (isa<IntegerType>(ShadowTy) || isa<VectorType>(ShadowTy) ||
-         isa<StructType>(ShadowTy)) &&
-        "Can only insert checks for integer, vector, and struct shadow types");
+    assert((isa<IntegerType>(ShadowTy) || isa<VectorType>(ShadowTy) ||
+            isa<StructType>(ShadowTy) || isa<ArrayType>(ShadowTy)) &&
+           "Can only insert checks for integer, vector, and aggregate shadow "
+           "types");
 #endif
     InstrumentationList.push_back(
         ShadowOriginAndInsertPoint(Shadow, Origin, OrigIns));
@@ -1810,24 +1818,6 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     llvm_unreachable("Unknown ordering");
   }
 
-  Value *makeAddReleaseOrderingTable(IRBuilder<> &IRB) {
-    constexpr int NumOrderings = (int)AtomicOrderingCABI::seq_cst + 1;
-    uint32_t OrderingTable[NumOrderings] = {};
-
-    OrderingTable[(int)AtomicOrderingCABI::relaxed] =
-        OrderingTable[(int)AtomicOrderingCABI::release] =
-            (int)AtomicOrderingCABI::release;
-    OrderingTable[(int)AtomicOrderingCABI::consume] =
-        OrderingTable[(int)AtomicOrderingCABI::acquire] =
-            OrderingTable[(int)AtomicOrderingCABI::acq_rel] =
-                (int)AtomicOrderingCABI::acq_rel;
-    OrderingTable[(int)AtomicOrderingCABI::seq_cst] =
-        (int)AtomicOrderingCABI::seq_cst;
-
-    return ConstantDataVector::get(IRB.getContext(),
-                                   makeArrayRef(OrderingTable, NumOrderings));
-  }
-
   AtomicOrdering addAcquireOrdering(AtomicOrdering a) {
     switch (a) {
       case AtomicOrdering::NotAtomic:
@@ -1843,24 +1833,6 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
         return AtomicOrdering::SequentiallyConsistent;
     }
     llvm_unreachable("Unknown ordering");
-  }
-
-  Value *makeAddAcquireOrderingTable(IRBuilder<> &IRB) {
-    constexpr int NumOrderings = (int)AtomicOrderingCABI::seq_cst + 1;
-    uint32_t OrderingTable[NumOrderings] = {};
-
-    OrderingTable[(int)AtomicOrderingCABI::relaxed] =
-        OrderingTable[(int)AtomicOrderingCABI::acquire] =
-            OrderingTable[(int)AtomicOrderingCABI::consume] =
-                (int)AtomicOrderingCABI::acquire;
-    OrderingTable[(int)AtomicOrderingCABI::release] =
-        OrderingTable[(int)AtomicOrderingCABI::acq_rel] =
-            (int)AtomicOrderingCABI::acq_rel;
-    OrderingTable[(int)AtomicOrderingCABI::seq_cst] =
-        (int)AtomicOrderingCABI::seq_cst;
-
-    return ConstantDataVector::get(IRB.getContext(),
-                                   makeArrayRef(OrderingTable, NumOrderings));
   }
 
   // ------------------- Visitors.
@@ -2679,9 +2651,7 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
   void handleLifetimeStart(IntrinsicInst &I) {
     if (!PoisonStack)
       return;
-    DenseMap<Value *, AllocaInst *> AllocaForValue;
-    AllocaInst *AI =
-        llvm::findAllocaForValue(I.getArgOperand(1), AllocaForValue);
+    AllocaInst *AI = llvm::findAllocaForValue(I.getArgOperand(1));
     if (!AI)
       InstrumentLifetimeStart = false;
     LifetimeStartList.push_back(std::make_pair(&I, AI));
@@ -3481,60 +3451,6 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     }
   }
 
-  void visitLibAtomicLoad(CallBase &CB) {
-    IRBuilder<> IRB(&CB);
-    Value *Size = CB.getArgOperand(0);
-    Value *SrcPtr = CB.getArgOperand(1);
-    Value *DstPtr = CB.getArgOperand(2);
-    Value *Ordering = CB.getArgOperand(3);
-    // Convert the call to have at least Acquire ordering to make sure
-    // the shadow operations aren't reordered before it.
-    Value *NewOrdering =
-        IRB.CreateExtractElement(makeAddAcquireOrderingTable(IRB), Ordering);
-    CB.setArgOperand(3, NewOrdering);
-
-    IRBuilder<> NextIRB(CB.getNextNode());
-    NextIRB.SetCurrentDebugLocation(CB.getDebugLoc());
-
-    Value *SrcShadowPtr, *SrcOriginPtr;
-    std::tie(SrcShadowPtr, SrcOriginPtr) =
-        getShadowOriginPtr(SrcPtr, NextIRB, NextIRB.getInt8Ty(), Align(1),
-                           /*isStore*/ false);
-    Value *DstShadowPtr =
-        getShadowOriginPtr(DstPtr, NextIRB, NextIRB.getInt8Ty(), Align(1),
-                           /*isStore*/ true)
-            .first;
-
-    NextIRB.CreateMemCpy(DstShadowPtr, Align(1), SrcShadowPtr, Align(1), Size);
-    if (MS.TrackOrigins) {
-      Value *SrcOrigin = NextIRB.CreateAlignedLoad(MS.OriginTy, SrcOriginPtr,
-                                                   kMinOriginAlignment);
-      Value *NewOrigin = updateOrigin(SrcOrigin, NextIRB);
-      NextIRB.CreateCall(MS.MsanSetOriginFn, {DstPtr, Size, NewOrigin});
-    }
-  }
-
-  void visitLibAtomicStore(CallBase &CB) {
-    IRBuilder<> IRB(&CB);
-    Value *Size = CB.getArgOperand(0);
-    Value *DstPtr = CB.getArgOperand(2);
-    Value *Ordering = CB.getArgOperand(3);
-    // Convert the call to have at least Release ordering to make sure
-    // the shadow operations aren't reordered after it.
-    Value *NewOrdering =
-        IRB.CreateExtractElement(makeAddReleaseOrderingTable(IRB), Ordering);
-    CB.setArgOperand(3, NewOrdering);
-
-    Value *DstShadowPtr =
-        getShadowOriginPtr(DstPtr, IRB, IRB.getInt8Ty(), Align(1),
-                           /*isStore*/ true)
-            .first;
-
-    // Atomic store always paints clean shadow/origin. See file header.
-    IRB.CreateMemSet(DstShadowPtr, getCleanShadow(IRB.getInt8Ty()), Size,
-                     Align(1));
-  }
-
   void visitCallBase(CallBase &CB) {
     assert(!CB.getMetadata("nosanitize"));
     if (CB.isInlineAsm()) {
@@ -3548,23 +3464,6 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
         visitInstruction(CB);
       return;
     }
-    LibFunc LF;
-    if (TLI->getLibFunc(CB, LF)) {
-      // libatomic.a functions need to have special handling because there isn't
-      // a good way to intercept them or compile the library with
-      // instrumentation.
-      switch (LF) {
-      case LibFunc_atomic_load:
-        visitLibAtomicLoad(CB);
-        return;
-      case LibFunc_atomic_store:
-        visitLibAtomicStore(CB);
-        return;
-      default:
-        break;
-      }
-    }
-
     if (auto *Call = dyn_cast<CallInst>(&CB)) {
       assert(!isa<IntrinsicInst>(Call) && "intrinsics are handled elsewhere");
 
@@ -3572,14 +3471,15 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
       // will become a non-readonly function after it is instrumented by us. To
       // prevent this code from being optimized out, mark that function
       // non-readonly in advance.
+      AttrBuilder B;
+      B.addAttribute(Attribute::ReadOnly)
+          .addAttribute(Attribute::ReadNone)
+          .addAttribute(Attribute::WriteOnly)
+          .addAttribute(Attribute::ArgMemOnly)
+          .addAttribute(Attribute::Speculatable);
+
+      Call->removeAttributes(AttributeList::FunctionIndex, B);
       if (Function *Func = Call->getCalledFunction()) {
-        // Clear out readonly/readnone attributes.
-        AttrBuilder B;
-        B.addAttribute(Attribute::ReadOnly)
-            .addAttribute(Attribute::ReadNone)
-            .addAttribute(Attribute::WriteOnly)
-            .addAttribute(Attribute::ArgMemOnly)
-            .addAttribute(Attribute::Speculatable);
         Func->removeAttributes(AttributeList::FunctionIndex, B);
       }
 
@@ -4052,6 +3952,12 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
       instrumentAsmArgument(Operand, I, IRB, DL, /*isOutput*/ true);
     }
 
+    setShadow(&I, getCleanShadow(&I));
+    setOrigin(&I, getCleanOrigin());
+  }
+
+  void visitFreezeInst(FreezeInst &I) {
+    // Freeze always returns a fully defined value.
     setShadow(&I, getCleanShadow(&I));
     setOrigin(&I, getCleanOrigin());
   }
@@ -4738,15 +4644,14 @@ struct VarArgPowerPC64Helper : public VarArgHelper {
     // For PowerPC, we need to deal with alignment of stack arguments -
     // they are mostly aligned to 8 bytes, but vectors and i128 arrays
     // are aligned to 16 bytes, byvals can be aligned to 8 or 16 bytes,
-    // and QPX vectors are aligned to 32 bytes.  For that reason, we
-    // compute current offset from stack pointer (which is always properly
-    // aligned), and offset for the first vararg, then subtract them.
+    // For that reason, we compute current offset from stack pointer (which is
+    // always properly aligned), and offset for the first vararg, then subtract
+    // them.
     unsigned VAArgBase;
     Triple TargetTriple(F.getParent()->getTargetTriple());
     // Parameter save area starts at 48 bytes from frame pointer for ABIv1,
     // and 32 bytes for ABIv2.  This is usually determined by target
     // endianness, but in theory could be overridden by function attribute.
-    // For simplicity, we ignore it here (it'd only matter for QPX vectors).
     if (TargetTriple.getArch() == Triple::ppc64)
       VAArgBase = 48;
     else

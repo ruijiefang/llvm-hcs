@@ -999,6 +999,12 @@ def int_ssub_sat : Intrinsic<[llvm_anyint_ty],
 def int_usub_sat : Intrinsic<[llvm_anyint_ty],
                              [LLVMMatchType<0>, LLVMMatchType<0>],
                              [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_sshl_sat : Intrinsic<[llvm_anyint_ty],
+                             [LLVMMatchType<0>, LLVMMatchType<0>],
+                             [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_ushl_sat : Intrinsic<[llvm_anyint_ty],
+                             [LLVMMatchType<0>, LLVMMatchType<0>],
+                             [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
 
 //===------------------------- Fixed Point Arithmetic Intrinsics ---------------------===//
 //
@@ -1038,6 +1044,25 @@ def int_sdiv_fix_sat : Intrinsic<[llvm_anyint_ty],
 def int_udiv_fix_sat : Intrinsic<[llvm_anyint_ty],
                                  [LLVMMatchType<0>, LLVMMatchType<0>, llvm_i32_ty],
                                  [IntrNoMem, ImmArg<ArgIndex<2>>]>;
+
+//===------------------ Integer Min/Max/Abs Intrinsics --------------------===//
+//
+def int_abs : Intrinsic<
+    [llvm_anyint_ty], [LLVMMatchType<0>, llvm_i1_ty],
+    [IntrNoMem, IntrSpeculatable, IntrWillReturn, ImmArg<ArgIndex<1>>]>;
+
+def int_smax : Intrinsic<
+    [llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>],
+    [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_smin : Intrinsic<
+    [llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>],
+    [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_umax : Intrinsic<
+    [llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>],
+    [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_umin : Intrinsic<
+    [llvm_anyint_ty], [LLVMMatchType<0>, LLVMMatchType<0>],
+    [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
 
 //===------------------------- Memory Use Markers -------------------------===//
 //

@@ -12797,8 +12797,9 @@ bool Sema::buildOverloadedCallSet(Scope *S, Expr *Fn,
       // then create a type dependent CallExpr. The goal is to postpone name
       // lookup to instantiation time to be able to search into type dependent
       // base classes.
-      CallExpr *CE = CallExpr::Create(Context, Fn, Args, Context.DependentTy,
-                                      VK_RValue, RParenLoc);
+      CallExpr *CE =
+          CallExpr::Create(Context, Fn, Args, Context.DependentTy, VK_RValue,
+                           RParenLoc, CurFPFeatureOverrides());
       CE->markDependentForPostponedNameLookup();
       *Result = CE;
       return true;
@@ -12993,7 +12994,18 @@ ExprResult Sema::BuildOverloadedCallExpr(Scope *S, Expr *Fn,
 
 static bool IsOverloaded(const UnresolvedSetImpl &Functions) {
   return Functions.size() > 1 ||
-    (Functions.size() == 1 && isa<FunctionTemplateDecl>(*Functions.begin()));
+         (Functions.size() == 1 &&
+          isa<FunctionTemplateDecl>((*Functions.begin())->getUnderlyingDecl()));
+}
+
+ExprResult Sema::CreateUnresolvedLookupExpr(CXXRecordDecl *NamingClass,
+                                            NestedNameSpecifierLoc NNSLoc,
+                                            DeclarationNameInfo DNI,
+                                            const UnresolvedSetImpl &Fns,
+                                            bool PerformADL) {
+  return UnresolvedLookupExpr::Create(Context, NamingClass, NNSLoc, DNI,
+                                      PerformADL, IsOverloaded(Fns),
+                                      Fns.begin(), Fns.end());
 }
 
 /// Create a unary operation that may resolve to an overloaded
@@ -13046,10 +13058,11 @@ Sema::CreateOverloadedUnaryOp(SourceLocation OpLoc, UnaryOperatorKind Opc,
                                    CurFPFeatureOverrides());
 
     CXXRecordDecl *NamingClass = nullptr; // lookup ignores member operators
-    UnresolvedLookupExpr *Fn = UnresolvedLookupExpr::Create(
-        Context, NamingClass, NestedNameSpecifierLoc(), OpNameInfo,
-        /*ADL*/ true, IsOverloaded(Fns), Fns.begin(), Fns.end());
-    return CXXOperatorCallExpr::Create(Context, Op, Fn, ArgsArray,
+    ExprResult Fn = CreateUnresolvedLookupExpr(
+        NamingClass, NestedNameSpecifierLoc(), OpNameInfo, Fns);
+    if (Fn.isInvalid())
+      return ExprError();
+    return CXXOperatorCallExpr::Create(Context, Op, Fn.get(), ArgsArray,
                                        Context.DependentTy, VK_RValue, OpLoc,
                                        CurFPFeatureOverrides());
   }
@@ -13308,10 +13321,11 @@ ExprResult Sema::CreateOverloadedBinOp(SourceLocation OpLoc,
     // TODO: provide better source location info in DNLoc component.
     DeclarationName OpName = Context.DeclarationNames.getCXXOperatorName(Op);
     DeclarationNameInfo OpNameInfo(OpName, OpLoc);
-    UnresolvedLookupExpr *Fn = UnresolvedLookupExpr::Create(
-        Context, NamingClass, NestedNameSpecifierLoc(), OpNameInfo,
-        /*ADL*/ PerformADL, IsOverloaded(Fns), Fns.begin(), Fns.end());
-    return CXXOperatorCallExpr::Create(Context, Op, Fn, Args,
+    ExprResult Fn = CreateUnresolvedLookupExpr(
+        NamingClass, NestedNameSpecifierLoc(), OpNameInfo, Fns, PerformADL);
+    if (Fn.isInvalid())
+      return ExprError();
+    return CXXOperatorCallExpr::Create(Context, Op, Fn.get(), Args,
                                        Context.DependentTy, VK_RValue, OpLoc,
                                        CurFPFeatureOverrides());
   }
@@ -13775,15 +13789,13 @@ Sema::CreateOverloadedArraySubscriptExpr(SourceLocation LLoc,
     // CHECKME: no 'operator' keyword?
     DeclarationNameInfo OpNameInfo(OpName, LLoc);
     OpNameInfo.setCXXOperatorNameRange(SourceRange(LLoc, RLoc));
-    UnresolvedLookupExpr *Fn
-      = UnresolvedLookupExpr::Create(Context, NamingClass,
-                                     NestedNameSpecifierLoc(), OpNameInfo,
-                                     /*ADL*/ true, /*Overloaded*/ false,
-                                     UnresolvedSetIterator(),
-                                     UnresolvedSetIterator());
+    ExprResult Fn = CreateUnresolvedLookupExpr(
+        NamingClass, NestedNameSpecifierLoc(), OpNameInfo, UnresolvedSet<0>());
+    if (Fn.isInvalid())
+      return ExprError();
     // Can't add any actual overloads yet
 
-    return CXXOperatorCallExpr::Create(Context, OO_Subscript, Fn, Args,
+    return CXXOperatorCallExpr::Create(Context, OO_Subscript, Fn.get(), Args,
                                        Context.DependentTy, VK_RValue, RLoc,
                                        CurFPFeatureOverrides());
   }
@@ -13978,9 +13990,9 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
         << (qualsString.find(' ') == std::string::npos ? 1 : 2);
     }
 
-    CXXMemberCallExpr *call =
-        CXXMemberCallExpr::Create(Context, MemExprE, Args, resultType,
-                                  valueKind, RParenLoc, proto->getNumParams());
+    CXXMemberCallExpr *call = CXXMemberCallExpr::Create(
+        Context, MemExprE, Args, resultType, valueKind, RParenLoc,
+        CurFPFeatureOverrides(), proto->getNumParams());
 
     if (CheckCallReturnType(proto->getReturnType(), op->getRHS()->getBeginLoc(),
                             call, nullptr))
@@ -13997,7 +14009,7 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
 
   if (isa<CXXPseudoDestructorExpr>(NakedMemExpr))
     return CallExpr::Create(Context, MemExprE, Args, Context.VoidTy, VK_RValue,
-                            RParenLoc);
+                            RParenLoc, CurFPFeatureOverrides());
 
   UnbridgedCastsSet UnbridgedCasts;
   if (checkArgPlaceholdersForOverload(*this, Args, UnbridgedCasts))
@@ -14135,9 +14147,9 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
 
   assert(Method && "Member call to something that isn't a method?");
   const auto *Proto = Method->getType()->castAs<FunctionProtoType>();
-  CXXMemberCallExpr *TheCall =
-      CXXMemberCallExpr::Create(Context, MemExprE, Args, ResultType, VK,
-                                RParenLoc, Proto->getNumParams());
+  CXXMemberCallExpr *TheCall = CXXMemberCallExpr::Create(
+      Context, MemExprE, Args, ResultType, VK, RParenLoc,
+      CurFPFeatureOverrides(), Proto->getNumParams());
 
   // Check for a valid return type.
   if (CheckCallReturnType(Method->getReturnType(), MemExpr->getMemberLoc(),
@@ -14192,12 +14204,12 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
       Diag(MemExpr->getBeginLoc(),
            diag::warn_call_to_pure_virtual_member_function_from_ctor_dtor)
           << MD->getDeclName() << isa<CXXDestructorDecl>(CurContext)
-          << MD->getParent()->getDeclName();
+          << MD->getParent();
 
       Diag(MD->getBeginLoc(), diag::note_previous_decl) << MD->getDeclName();
       if (getLangOpts().AppleKext)
         Diag(MemExpr->getBeginLoc(), diag::note_pure_qualified_call_kext)
-            << MD->getParent()->getDeclName() << MD->getDeclName();
+            << MD->getParent() << MD->getDeclName();
     }
   }
 
@@ -14680,7 +14692,7 @@ ExprResult Sema::BuildLiteralOperatorCall(LookupResult &R,
 
   UserDefinedLiteral *UDL = UserDefinedLiteral::Create(
       Context, Fn.get(), llvm::makeArrayRef(ConvArgs, Args.size()), ResultTy,
-      VK, LitEndLoc, UDSuffixLoc);
+      VK, LitEndLoc, UDSuffixLoc, CurFPFeatureOverrides());
 
   if (CheckCallReturnType(FD->getReturnType(), UDSuffixLoc, UDL, FD))
     return ExprError();
@@ -14726,12 +14738,12 @@ Sema::BuildForRangeBeginEndCall(SourceLocation Loc,
       return FRS_DiagnosticIssued;
     }
   } else {
-    UnresolvedSet<0> FoundNames;
-    UnresolvedLookupExpr *Fn =
-      UnresolvedLookupExpr::Create(Context, /*NamingClass=*/nullptr,
-                                   NestedNameSpecifierLoc(), NameInfo,
-                                   /*NeedsADL=*/true, /*Overloaded=*/false,
-                                   FoundNames.begin(), FoundNames.end());
+    ExprResult FnR = CreateUnresolvedLookupExpr(/*NamingClass=*/nullptr,
+                                                NestedNameSpecifierLoc(),
+                                                NameInfo, UnresolvedSet<0>());
+    if (FnR.isInvalid())
+      return FRS_DiagnosticIssued;
+    UnresolvedLookupExpr *Fn = cast<UnresolvedLookupExpr>(FnR.get());
 
     bool CandidateSetError = buildOverloadedCallSet(S, Fn, Fn, Range, Loc,
                                                     CandidateSet, CallExpr);

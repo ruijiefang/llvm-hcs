@@ -753,10 +753,10 @@ canonicalizeImmediatelyDeclaredConstraint(const ASTContext &C, Expr *IDC,
       CSE->isInstantiationDependent(), CSE->containsUnexpandedParameterPack());
 
   if (auto *OrigFold = dyn_cast<CXXFoldExpr>(IDC))
-    NewIDC = new (C) CXXFoldExpr(OrigFold->getType(), SourceLocation(), NewIDC,
-                                 BinaryOperatorKind::BO_LAnd,
-                                 SourceLocation(), /*RHS=*/nullptr,
-                                 SourceLocation(), /*NumExpansions=*/None);
+    NewIDC = new (C) CXXFoldExpr(
+        OrigFold->getType(), /*Callee*/nullptr, SourceLocation(), NewIDC,
+        BinaryOperatorKind::BO_LAnd, SourceLocation(), /*RHS=*/nullptr,
+        SourceLocation(), /*NumExpansions=*/None);
   return NewIDC;
 }
 
@@ -919,18 +919,20 @@ static const LangASMap *getAddressSpaceMap(const TargetInfo &T,
     // The fake address space map must have a distinct entry for each
     // language-specific address space.
     static const unsigned FakeAddrSpaceMap[] = {
-        0, // Default
-        1, // opencl_global
-        3, // opencl_local
-        2, // opencl_constant
-        0, // opencl_private
-        4, // opencl_generic
-        5, // cuda_device
-        6, // cuda_constant
-        7, // cuda_shared
-        8, // ptr32_sptr
-        9, // ptr32_uptr
-        10 // ptr64
+        0,  // Default
+        1,  // opencl_global
+        3,  // opencl_local
+        2,  // opencl_constant
+        0,  // opencl_private
+        4,  // opencl_generic
+        5,  // opencl_global_device
+        6,  // opencl_global_host
+        7,  // cuda_device
+        8,  // cuda_constant
+        9,  // cuda_shared
+        10, // ptr32_sptr
+        11, // ptr32_uptr
+        12  // ptr64
     };
     return &FakeAddrSpaceMap;
   } else {
@@ -2439,8 +2441,8 @@ CharUnits ASTContext::getTypeUnadjustedAlignInChars(const Type *T) const {
 
 /// getPreferredTypeAlign - Return the "preferred" alignment of the specified
 /// type for the current target in bits.  This can be different than the ABI
-/// alignment in cases where it is beneficial for performance to overalign
-/// a data type.
+/// alignment in cases where it is beneficial for performance or backwards
+/// compatibility preserving to overalign a data type.
 unsigned ASTContext::getPreferredTypeAlign(const Type *T) const {
   TypeInfo TI = getTypeInfo(T);
   unsigned ABIAlign = TI.Align;
@@ -2450,18 +2452,33 @@ unsigned ASTContext::getPreferredTypeAlign(const Type *T) const {
   // The preferred alignment of member pointers is that of a pointer.
   if (T->isMemberPointerType())
     return getPreferredTypeAlign(getPointerDiffType().getTypePtr());
-
+ 
   if (!Target->allowsLargerPreferedTypeAlignment())
     return ABIAlign;
 
-  // Double and long long should be naturally aligned if possible.
+  if (const auto *RT = T->getAs<RecordType>()) {
+    if (TI.AlignIsRequired)
+      return ABIAlign;
+
+    unsigned PreferredAlign = static_cast<unsigned>(
+        toBits(getASTRecordLayout(RT->getDecl()).PreferredAlignment));
+    assert(PreferredAlign >= ABIAlign &&
+           "PreferredAlign should be at least as large as ABIAlign.");
+    return PreferredAlign;
+  }
+
+  // Double (and, for targets supporting AIX `power` alignment, long double) and
+  // long long should be naturally aligned (despite requiring less alignment) if
+  // possible.
   if (const auto *CT = T->getAs<ComplexType>())
     T = CT->getElementType().getTypePtr();
   if (const auto *ET = T->getAs<EnumType>())
     T = ET->getDecl()->getIntegerType().getTypePtr();
   if (T->isSpecificBuiltinType(BuiltinType::Double) ||
       T->isSpecificBuiltinType(BuiltinType::LongLong) ||
-      T->isSpecificBuiltinType(BuiltinType::ULongLong))
+      T->isSpecificBuiltinType(BuiltinType::ULongLong) ||
+      (T->isSpecificBuiltinType(BuiltinType::LongDouble) &&
+       Target->defaultsToAIXPowerAlignment()))
     // Don't increase the alignment if an alignment attribute was specified on a
     // typedef declaration.
     if (!TI.AlignIsRequired)
@@ -4802,37 +4819,27 @@ ASTContext::getInjectedTemplateArgs(const TemplateParameterList *Params,
 }
 
 QualType ASTContext::getPackExpansionType(QualType Pattern,
-                                          Optional<unsigned> NumExpansions) {
+                                          Optional<unsigned> NumExpansions,
+                                          bool ExpectPackInType) {
+  assert((!ExpectPackInType || Pattern->containsUnexpandedParameterPack()) &&
+         "Pack expansions must expand one or more parameter packs");
+
   llvm::FoldingSetNodeID ID;
   PackExpansionType::Profile(ID, Pattern, NumExpansions);
 
-  // A deduced type can deduce to a pack, eg
-  //   auto ...x = some_pack;
-  // That declaration isn't (yet) valid, but is created as part of building an
-  // init-capture pack:
-  //   [...x = some_pack] {}
-  assert((Pattern->containsUnexpandedParameterPack() ||
-          Pattern->getContainedDeducedType()) &&
-         "Pack expansions must expand one or more parameter packs");
   void *InsertPos = nullptr;
-  PackExpansionType *T
-    = PackExpansionTypes.FindNodeOrInsertPos(ID, InsertPos);
+  PackExpansionType *T = PackExpansionTypes.FindNodeOrInsertPos(ID, InsertPos);
   if (T)
     return QualType(T, 0);
 
   QualType Canon;
   if (!Pattern.isCanonical()) {
-    Canon = getCanonicalType(Pattern);
-    // The canonical type might not contain an unexpanded parameter pack, if it
-    // contains an alias template specialization which ignores one of its
-    // parameters.
-    if (Canon->containsUnexpandedParameterPack()) {
-      Canon = getPackExpansionType(Canon, NumExpansions);
+    Canon = getPackExpansionType(getCanonicalType(Pattern), NumExpansions,
+                                 /*ExpectPackInType=*/false);
 
-      // Find the insert position again, in case we inserted an element into
-      // PackExpansionTypes and invalidated our insert position.
-      PackExpansionTypes.FindNodeOrInsertPos(ID, InsertPos);
-    }
+    // Find the insert position again, in case we inserted an element into
+    // PackExpansionTypes and invalidated our insert position.
+    PackExpansionTypes.FindNodeOrInsertPos(ID, InsertPos);
   }
 
   T = new (*this, TypeAlignment)
@@ -10318,12 +10325,17 @@ static GVALinkage adjustGVALinkageForAttributes(const ASTContext &Context,
   } else if (D->hasAttr<DLLExportAttr>()) {
     if (L == GVA_DiscardableODR)
       return GVA_StrongODR;
-  } else if (Context.getLangOpts().CUDA && Context.getLangOpts().CUDAIsDevice &&
-             D->hasAttr<CUDAGlobalAttr>()) {
+  } else if (Context.getLangOpts().CUDA && Context.getLangOpts().CUDAIsDevice) {
     // Device-side functions with __global__ attribute must always be
     // visible externally so they can be launched from host.
-    if (L == GVA_DiscardableODR || L == GVA_Internal)
+    if (D->hasAttr<CUDAGlobalAttr>() &&
+        (L == GVA_DiscardableODR || L == GVA_Internal))
       return GVA_StrongODR;
+    // Single source offloading languages like CUDA/HIP need to be able to
+    // access static device variables from host code of the same compilation
+    // unit. This is done by externalizing the static variable.
+    if (Context.shouldExternalizeStaticVar(D))
+      return GVA_StrongExternal;
   }
   return L;
 }
@@ -11177,4 +11189,12 @@ clang::operator<<(const DiagnosticBuilder &DB,
   if (Section.Decl)
     return DB << Section.Decl;
   return DB << "a prior #pragma section";
+}
+
+bool ASTContext::shouldExternalizeStaticVar(const Decl *D) const {
+  return !getLangOpts().GPURelocatableDeviceCode &&
+         (D->hasAttr<CUDADeviceAttr>() || D->hasAttr<CUDAConstantAttr>()) &&
+         isa<VarDecl>(D) && cast<VarDecl>(D)->isFileVarDecl() &&
+         cast<VarDecl>(D)->getStorageClass() == SC_Static &&
+         CUDAStaticDeviceVarReferencedByHost.count(cast<VarDecl>(D));
 }

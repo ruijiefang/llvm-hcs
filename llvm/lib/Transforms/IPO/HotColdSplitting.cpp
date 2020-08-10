@@ -665,19 +665,27 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
 bool HotColdSplitting::run(Module &M) {
   bool Changed = false;
   bool HasProfileSummary = (M.getProfileSummary(/* IsCS */ false) != nullptr);
+
+  LLVM_DEBUG(dbgs() << "[hotcoldsplit] Hot Cold Splitting running on module" << M.getName() << "\n");
+
   for (auto It = M.begin(), End = M.end(); It != End; ++It) {
     Function &F = *It;
 
     // Do not touch declarations.
-    if (F.isDeclaration())
+    if (F.isDeclaration()) {
+      LLVM_DEBUG(dbgs() << " [hotcoldsplit] skip " << F.getName() << ", declaration\n");
       continue;
+    }
 
     // Do not modify `optnone` functions.
-    if (F.hasOptNone())
+    if (F.hasOptNone()) {
+      LLVM_DEBUG(dbgs() << " [hotcoldsplit] skip " << F.getName() << ", optnone\n");
       continue;
+    }
 
     // Detect inherently cold functions and mark them as such.
     if (isFunctionCold(F)) {
+      LLVM_DEBUG(dbgs() << " [hotcoldsplit] skip " << F.getName() << ", cold\n");
       Changed |= markFunctionCold(F);
       continue;
     }

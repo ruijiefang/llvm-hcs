@@ -326,7 +326,7 @@ Function *HotColdSplitting::extractColdRegion(
   int OutliningBenefit = getOutliningBenefit(Region, TTI);
   int OutliningPenalty =
       getOutliningPenalty(Region, Inputs.size(), Outputs.size());
-  LLVM_DEBUG(dbgs() << "Split profitability: benefit = " << OutliningBenefit
+  LLVM_DEBUG(dbgs() << "[hotcoldsplit-profit] Split profitability: benefit = " << OutliningBenefit
                     << ", penalty = " << OutliningPenalty << "\n");
 
   // SplittingDelta gives OutliningBenefit a "boost" by allowing
@@ -334,6 +334,7 @@ Function *HotColdSplitting::extractColdRegion(
   // Empirical evidence indicates that setting SplittingDelta to a small
   // number in [1, 5] can lead to a sizeable improvement in the overall
   // number of cold regions extracted.
+  LLVM_DEBUG(dbgs() << "[hotcoldsplit-profit] Splitting Delta set to " << SplittingDelta << "\n");
   if (OutliningBenefit + SplittingDelta <= OutliningPenalty)
     return nullptr;
 

@@ -70,6 +70,7 @@
 #include <algorithm>
 #include <cassert>
 #include <string>
+#include <set>
 
 #define DEBUG_TYPE "hotcoldsplit"
 
@@ -78,8 +79,8 @@ STATISTIC(NumColdRegionsOutlined, "Number of cold regions outlined.");
 
 using namespace llvm;
 
-static cl::opt<bool> EnableStaticAnalyis("hot-cold-static-analysis",
-                              cl::init(true), cl::Hidden);
+static cl::opt<bool> EnableStaticAnalysis("hot-cold-static-analysis",
+                                          cl::init(true), cl::Hidden);
 
 static cl::opt<int>
     SplittingThreshold("hotcoldsplit-threshold", cl::init(2), cl::Hidden,
@@ -340,6 +341,7 @@ Function *HotColdSplitting::extractColdRegion(
   if (OutliningBenefit <= OutliningPenalty)
     return nullptr;
 
+  LLVM_DEBUG(dbgs() << "Attempting to outline region into function\n");
   Function *OrigF = Region[0]->getParent();
   if (Function *OutF = CE.extractCodeRegion(CEAC)) {
     User *U = *OutF->user_begin();
@@ -370,6 +372,7 @@ Function *HotColdSplitting::extractColdRegion(
     return OutF;
   }
 
+  LLVM_DEBUG(dbgs() << "CodeExtractor failed to extract the region\n");
   ORE.emit([&]() {
     return OptimizationRemarkMissed(DEBUG_TYPE, "ExtractFailed",
                                     &*Region[0]->begin())
@@ -592,6 +595,26 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   OptimizationRemarkEmitter &ORE = (*GetORE)(F);
   AssumptionCache *AC = LookupAC(F);
 
+  std::set<BasicBlock*> LPadSuccessors;
+
+  // Split EH pad blocks into a landing pad block and the
+  // rest. We can start outlining at the first non-landingpad
+  // instruction.
+  for (BasicBlock *BB : RPOT)
+    if (BB->isEHPad()) {
+      LLVM_DEBUG({
+        dbgs() << "[eh] Found an EH BB: "; 
+        BB->dump();
+        dbgs() << "===============\n";});
+      Instruction * LPadInst = BB->getLandingPadInst()->getNextNode();
+      BasicBlock * NewSuccessorBlock = BB->splitBasicBlock(LPadInst);
+      LLVM_DEBUG({
+        dbgs() << "[eh] Split BB into lpad and rest, rest is: ";
+        NewSuccessorBlock->dump();
+        dbgs() << "===============\n";});
+      LPadSuccessors.insert(NewSuccessorBlock);
+    }
+
   // Find all cold regions.
   for (BasicBlock *BB : RPOT) {
     // This block is already part of some outlining region.
@@ -599,7 +622,19 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
       continue;
 
     bool Cold = (BFI && PSI->isColdBlock(BB, BFI)) ||
-                (EnableStaticAnalyis && unlikelyExecuted(*BB, PSI, BFI));
+                (EnableStaticAnalysis && unlikelyExecuted(*BB, PSI, BFI));
+
+    if (EnableStaticAnalysis && BB->getSinglePredecessor() && BB->getSinglePredecessor()->isEHPad()) {
+      LLVM_DEBUG(dbgs() << "[eh] Block " << BB->getName() << " has EHPad predecessor and marked as cold\n");
+      Cold = true;
+    }
+
+    // if BB is a split EH-pad block
+    if (LPadSuccessors.find(BB) != LPadSuccessors.end()) {
+      LLVM_DEBUG(dbgs() << "[eh] Found a LPad successor block " << BB->getName() << "\n");
+      Cold = true;
+    }
+
     if (!Cold)
       continue;
 

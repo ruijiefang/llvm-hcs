@@ -323,28 +323,6 @@ Function *HotColdSplitting::extractColdRegion(
     OptimizationRemarkEmitter &ORE, AssumptionCache *AC, unsigned Count) {
   assert(!Region.empty());
 
-  // TODO: Pass BFI and BPI to update profile information.
-  CodeExtractor CE(Region, &DT, /* AggregateArgs */ false, /* BFI */ nullptr,
-                   /* BPI */ nullptr, AC, /* AllowVarArgs */ false,
-                   /* AllowAlloca */ false,
-                   /* Suffix */ "cold." + std::to_string(Count));
-
-  // Perform a simple cost/benefit analysis to decide whether or not to permit
-  // splitting.
-  SetVector<Value *> Inputs, Outputs, Sinks;
-  CE.findInputsOutputs(Inputs, Outputs, Sinks);
-  int OutliningBenefit = getOutliningBenefit(Region, TTI);
-  int OutliningPenalty =
-      getOutliningPenalty(Region, Inputs.size(), Outputs.size());
-  LLVM_DEBUG(dbgs() << "Split profitability: benefit = " << OutliningBenefit
-                    << ", penalty = " << OutliningPenalty << "\n");
-  if (OutliningBenefit <= OutliningPenalty)
-    return nullptr;
-
-  LLVM_DEBUG(dbgs() << "Attempting to outline region into function\n");
-  LLVM_DEBUG(dbgs() << "Region size = " << Region.size() << "\n");
-  LLVM_DEBUG(dbgs() << "Region entry block = " << Region[0]->getName() << "\n");
-
   // EH outlining: Extract instructions that call eh.typeid.for 
   // in catch.dispatch block and form a new BB before it.
   for(BasicBlock* BB : Region) {
@@ -376,6 +354,43 @@ Function *HotColdSplitting::extractColdRegion(
         dbgs() << "================================\n";});
     }
   }
+  BlockSequence Region2;
+  for (BasicBlock *BB : Region) {
+    bool Outlinable = true;
+    for (const Instruction& I : *BB) {
+      if (isa<CallInst>(&I)) {
+        const CallInst* CI = dyn_cast<CallInst>(&I);
+        if (CI->getIntrinsicID() == Intrinsic::eh_typeid_for)
+          Outlinable = false;
+      }
+    }
+    if (Outlinable) { 
+      LLVM_DEBUG(dbgs() << " Block " << BB->getName() << " is outlinable.\n");
+      Region2.push_back(BB);
+    }
+  } 
+
+  // TODO: Pass BFI and BPI to update profile information.
+  CodeExtractor CE(Region2, &DT, /* AggregateArgs */ false, /* BFI */ nullptr,
+                   /* BPI */ nullptr, AC, /* AllowVarArgs */ false,
+                   /* AllowAlloca */ false,
+                   /* Suffix */ "cold." + std::to_string(Count));
+
+  // Perform a simple cost/benefit analysis to decide whether or not to permit
+  // splitting.
+  SetVector<Value *> Inputs, Outputs, Sinks;
+  CE.findInputsOutputs(Inputs, Outputs, Sinks);
+  int OutliningBenefit = getOutliningBenefit(Region, TTI);
+  int OutliningPenalty =
+      getOutliningPenalty(Region, Inputs.size(), Outputs.size());
+  LLVM_DEBUG(dbgs() << "Split profitability: benefit = " << OutliningBenefit
+                    << ", penalty = " << OutliningPenalty << "\n");
+  if (OutliningBenefit <= OutliningPenalty)
+    return nullptr;
+
+  LLVM_DEBUG(dbgs() << "Attempting to outline region into function\n");
+  LLVM_DEBUG(dbgs() << "Region size = " << Region.size() << "\n");
+  LLVM_DEBUG(dbgs() << "Region entry block = " << Region[0]->getName() << "\n");
 
   Function *OrigF = Region[0]->getParent();
   if (Function *OutF = CE.extractCodeRegion(CEAC)) {

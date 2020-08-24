@@ -245,7 +245,7 @@ buildExtractionBlockSet(ArrayRef<BasicBlock *> BBs, DominatorTree *DT,
         return {};
       }
   }
-
+  LLVM_DEBUG(dbgs() << "CodeExtractor: No problem building blocks for extraction.\n");
   return Result;
 }
 

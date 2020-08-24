@@ -342,6 +342,41 @@ Function *HotColdSplitting::extractColdRegion(
     return nullptr;
 
   LLVM_DEBUG(dbgs() << "Attempting to outline region into function\n");
+  LLVM_DEBUG(dbgs() << "Region size = " << Region.size() << "\n");
+  LLVM_DEBUG(dbgs() << "Region entry block = " << Region[0]->getName() << "\n");
+
+  // EH outlining: Extract instructions that call eh.typeid.for 
+  // in catch.dispatch block and form a new BB before it.
+  for(BasicBlock* BB : Region) {
+    if (BB->getName() == "catch.dispatch") {
+      LLVM_DEBUG({dbgs() << "Found catch.dispatch block, splitting from "; BB->getPrevNode()->dump(); });
+      BasicBlock *TypeIDCalls = BB->getPrevNode();
+      // Extract the calls to eh.typeid.for
+      std::vector<CallInst*> TypeIDLookups;
+      for(Instruction& I : *BB) {
+        if (isa<CallInst>(I)) {
+          CallInst *CI = dyn_cast<CallInst>(&I);
+          if (CI->getCalledFunction()->getIntrinsicID() == Intrinsic::eh_typeid_for) {
+            LLVM_DEBUG(dbgs() << " - adding " << CI->getName() << " from parent: " << BB->getName() << "\n");
+            TypeIDLookups.push_back(CI);
+          }
+        }
+      }
+
+      for(size_t I = 0; I < TypeIDLookups.size(); I++) {
+        LLVM_DEBUG(dbgs() << " - removing from parent: " << BB->getName() << "\n");
+        TypeIDLookups[I]->removeFromParent();
+        auto InsertFrom = TypeIDCalls->getInstList().begin();
+        TypeIDCalls->getInstList().insertAfter(InsertFrom, TypeIDLookups[I]);
+      }
+
+      LLVM_DEBUG({
+        dbgs() << "catch.dispatch BB found: === "; 
+        TypeIDCalls->dump();
+        dbgs() << "================================\n";});
+    }
+  }
+
   Function *OrigF = Region[0]->getParent();
   if (Function *OutF = CE.extractCodeRegion(CEAC)) {
     User *U = *OutF->user_begin();

@@ -205,8 +205,10 @@ buildExtractionBlockSet(ArrayRef<BasicBlock *> BBs, DominatorTree *DT,
   // empty set if we encounter invalid blocks.
   for (BasicBlock *BB : BBs) {
     // If this block is dead, don't process it.
-    if (DT && !DT->isReachableFromEntry(BB))
+    if (DT && !DT->isReachableFromEntry(BB)) {
+      LLVM_DEBUG(dbgs() << "CodeExtractor: Block " << BB->getName() << " is dead from entry\n");
       continue;
+    }
 
     if (!Result.insert(BB))
       llvm_unreachable("Repeated basic blocks in extraction input");
@@ -214,10 +216,13 @@ buildExtractionBlockSet(ArrayRef<BasicBlock *> BBs, DominatorTree *DT,
 
   LLVM_DEBUG(dbgs() << "Region front block: " << Result.front()->getName()
                     << '\n');
+  LLVM_DEBUG(dbgs() << "Region size for CodeExtractor: " << Result.size() << "\n");
 
   for (auto *BB : Result) {
-    if (!isBlockValidForExtraction(*BB, Result, AllowVarArgs, AllowAlloca))
-      return {};
+    if (!isBlockValidForExtraction(*BB, Result, AllowVarArgs, AllowAlloca)) { 
+      LLVM_DEBUG(dbgs() << "Block " << BB->getName() << " not valid for extraction.\n");
+      return {}; 
+    }
 
     // Make sure that the first block is not a landing pad.
     if (BB == Result.front()) {
@@ -578,8 +583,10 @@ void CodeExtractor::findAllocas(const CodeExtractorAnalysisCache &CEAC,
 }
 
 bool CodeExtractor::isEligible() const {
-  if (Blocks.empty())
+  if (Blocks.empty()) {
+    LLVM_DEBUG(dbgs() << "isEligible(): !!! Blocks are empty !!!\n");
     return false;
+  }
   BasicBlock *Header = *Blocks.begin();
   Function *F = Header->getParent();
 
@@ -597,8 +604,10 @@ bool CodeExtractor::isEligible() const {
     for (auto &BB : *F) {
       if (Blocks.count(&BB))
         continue;
-      if (llvm::any_of(BB, containsVarArgIntrinsic))
+      if (llvm::any_of(BB, containsVarArgIntrinsic)) {
+        LLVM_DEBUG(dbgs() << "isEligible(): Not eligible for extraction since contains vararg intrinsic.\n");
         return false;
+      }
     }
   }
   return true;
@@ -1524,8 +1533,10 @@ static void fixupDebugInfoPostExtraction(Function &OldFunc, Function &NewFunc,
 
 Function *
 CodeExtractor::extractCodeRegion(const CodeExtractorAnalysisCache &CEAC) {
-  if (!isEligible())
+  if (!isEligible()) {
+    LLVM_DEBUG(dbgs() << "CodeExtractor::extractCodeRegion: Cannot extract region because it is not eligible\n");
     return nullptr;
+  }
 
   // Assumption: this is a single-entry code region, and the header is the first
   // block in the region.

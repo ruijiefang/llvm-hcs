@@ -323,55 +323,8 @@ Function *HotColdSplitting::extractColdRegion(
     OptimizationRemarkEmitter &ORE, AssumptionCache *AC, unsigned Count) {
   assert(!Region.empty());
 
-  // EH outlining: Extract instructions that call eh.typeid.for 
-  // in catch.dispatch block and form a new BB before it.
-  for(BasicBlock* BB : Region) {
-    if (BB->getName() == "catch.dispatch") {
-      LLVM_DEBUG({dbgs() << "Found catch.dispatch block, splitting from "; BB->getPrevNode()->dump(); });
-      BasicBlock *TypeIDCalls = BB->getPrevNode();
-      // Extract the calls to eh.typeid.for
-      std::vector<CallInst*> TypeIDLookups;
-      for(Instruction& I : *BB) {
-        if (isa<CallInst>(I)) {
-          CallInst *CI = dyn_cast<CallInst>(&I);
-          if (CI->getCalledFunction()->getIntrinsicID() == Intrinsic::eh_typeid_for) {
-            LLVM_DEBUG(dbgs() << " - adding " << CI->getName() << " from parent: " << BB->getName() << "\n");
-            TypeIDLookups.push_back(CI);
-          }
-        }
-      }
-
-      for(size_t I = 0; I < TypeIDLookups.size(); I++) {
-        LLVM_DEBUG(dbgs() << " - removing from parent: " << BB->getName() << "\n");
-        TypeIDLookups[I]->removeFromParent();
-        auto InsertFrom = TypeIDCalls->getInstList().begin();
-        TypeIDCalls->getInstList().insertAfter(InsertFrom, TypeIDLookups[I]);
-      }
-
-      LLVM_DEBUG({
-        dbgs() << "catch.dispatch BB found: === "; 
-        TypeIDCalls->dump();
-        dbgs() << "================================\n";});
-    }
-  }
-  BlockSequence Region2;
-  for (BasicBlock *BB : Region) {
-    bool Outlinable = true;
-    for (const Instruction& I : *BB) {
-      if (isa<CallInst>(&I)) {
-        const CallInst* CI = dyn_cast<CallInst>(&I);
-        if (CI->getIntrinsicID() == Intrinsic::eh_typeid_for)
-          Outlinable = false;
-      }
-    }
-    if (Outlinable) { 
-      LLVM_DEBUG(dbgs() << " Block " << BB->getName() << " is outlinable.\n");
-      Region2.push_back(BB);
-    }
-  } 
-
   // TODO: Pass BFI and BPI to update profile information.
-  CodeExtractor CE(Region2, &DT, /* AggregateArgs */ false, /* BFI */ nullptr,
+  CodeExtractor CE(Region, &DT, /* AggregateArgs */ false, /* BFI */ nullptr,
                    /* BPI */ nullptr, AC, /* AllowVarArgs */ false,
                    /* AllowAlloca */ false,
                    /* Suffix */ "cold." + std::to_string(Count));
@@ -645,6 +598,11 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   OptimizationRemarkEmitter &ORE = (*GetORE)(F);
   AssumptionCache *AC = LookupAC(F);
 
+  
+  // For each catch.dispatch block, elevate the
+  // calls to eh.typeid.for instructions into
+  // the landingpad block for outlining purposes.
+  
   std::set<BasicBlock*> LPadSuccessors;
 
   // Split EH pad blocks into a landing pad block and the
@@ -656,8 +614,27 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
         dbgs() << "[eh] Found an EH BB: "; 
         BB->dump();
         dbgs() << "===============\n";});
+
+      if (!DT)
+        DT = std::make_unique<DominatorTree>(F); 
+      std::vector<Instruction*> EHIntrinsicCalls;
+      SmallVector<BasicBlock*, 2> Descendants;
+      DT->getDescendants(BB, Descendants); 
+      for(BasicBlock *SuccBB : Descendants) {
+          for (Instruction& I : *SuccBB) {
+            if (isa<CallInst>(&I)) {
+              const CallInst *CI = dyn_cast<CallInst>(&I);
+              if (CI->getIntrinsicID() == Intrinsic::eh_typeid_for)
+                EHIntrinsicCalls.push_back(&I);
+          }
+        }
+      }
       Instruction * LPadInst = BB->getLandingPadInst()->getNextNode();
       BasicBlock * NewSuccessorBlock = BB->splitBasicBlock(LPadInst);
+      for(size_t I = 0; I < EHIntrinsicCalls.size(); I++) {
+        EHIntrinsicCalls[I]->removeFromParent();
+        NewSuccessorBlock->getInstList().insertAfter(NewSuccessorBlock->getInstList().begin(), EHIntrinsicCalls[I]);
+      }
       LLVM_DEBUG({
         dbgs() << "[eh] Split BB into lpad and rest, rest is: ";
         NewSuccessorBlock->dump();

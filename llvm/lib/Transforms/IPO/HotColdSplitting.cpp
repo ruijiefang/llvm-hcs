@@ -69,8 +69,8 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
-#include <string>
 #include <set>
+#include <string>
 
 #define DEBUG_TYPE "hotcoldsplit"
 
@@ -598,57 +598,67 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   OptimizationRemarkEmitter &ORE = (*GetORE)(F);
   AssumptionCache *AC = LookupAC(F);
 
-  
   // For each catch.dispatch block, elevate the
   // calls to eh.typeid.for instructions into
   // the landingpad block for outlining purposes.
-  
-  std::set<BasicBlock*> LPadSuccessors;
+
+  std::set<BasicBlock *> LPadSuccessors;
 
   // Split EH pad blocks into a landing pad block and the
   // rest. We can start outlining at the first non-landingpad
   // instruction.
-  for (BasicBlock *BB : RPOT)
-    if (BB->isEHPad()) {
-      LLVM_DEBUG({
-        dbgs() << "[eh] Found an EH BB: "; 
-        BB->dump();
-        dbgs() << "===============\n";});
 
-      if (!DT)
-        DT = std::make_unique<DominatorTree>(F); 
-      std::vector<Instruction*> EHIntrinsicCalls;
-      SmallVector<BasicBlock*, 2> Descendants;
-      DT->getDescendants(BB, Descendants); 
-      for(BasicBlock *SuccBB : Descendants) {
-          for (Instruction& I : *SuccBB) {
+  // The EH outlining strategy below only works with Itanium-style EH.
+  // WinEH outlining is not supported. We check if the personality
+  // function is WinEH's (CxxFrameHandler3), or we try to do EH outlining.
+  // TODO find better way of finding out if function uses WinEH handling
+  // or find a way to outling WinEH code.
+  if (!F.getPersonalityFn()->getName().endswith("CxxFrameHandler3")) {
+    for (BasicBlock *BB : RPOT)
+      if (BB->isEHPad()) {
+        LLVM_DEBUG({
+          dbgs() << "[eh] Found an EH BB: ";
+          BB->dump();
+          dbgs() << "===============\n";
+        });
+
+        if (!DT)
+          DT = std::make_unique<DominatorTree>(F);
+        std::vector<Instruction *> EHIntrinsicCalls;
+        SmallVector<BasicBlock *, 2> Descendants;
+        DT->getDescendants(BB, Descendants);
+        for (BasicBlock *SuccBB : Descendants) {
+          for (Instruction &I : *SuccBB) {
             if (isa<CallInst>(&I)) {
               const CallInst *CI = dyn_cast<CallInst>(&I);
               if (CI->getIntrinsicID() == Intrinsic::eh_typeid_for)
                 EHIntrinsicCalls.push_back(&I);
+            }
           }
         }
-      }      
-      Instruction * LPadInst = BB->getLandingPadInst()->getNextNode();
-      BasicBlock * NewSuccessorBlock = SplitBlock(BB, LPadInst, DT.get());
-      for(size_t I = 0; I < EHIntrinsicCalls.size(); I++) {
-        EHIntrinsicCalls[I]->removeFromParent();
-        // Insert eh.typeid.for call after the landingpad instruction.
-        // We split \p BB from the next instruction after the landingpad
-        // instruction, so the landingpad instruction's successor
-        // must be the terminating unconditional branch.
-        Instruction* PreBranchInst = BB->getTerminator()->getPrevNode();
-        BB->getInstList().insertAfter(PreBranchInst->getIterator(), EHIntrinsicCalls[I]);
+        Instruction *LPadInst = BB->getLandingPadInst()->getNextNode();
+        BasicBlock *NewSuccessorBlock = SplitBlock(BB, LPadInst, DT.get());
+        for (size_t I = 0; I < EHIntrinsicCalls.size(); I++) {
+          EHIntrinsicCalls[I]->removeFromParent();
+          // Insert eh.typeid.for call after the landingpad instruction.
+          // We split \p BB from the next instruction after the landingpad
+          // instruction, so the landingpad instruction's successor
+          // must be the terminating unconditional branch.
+          Instruction *PreBranchInst = BB->getTerminator()->getPrevNode();
+          BB->getInstList().insertAfter(PreBranchInst->getIterator(),
+                                        EHIntrinsicCalls[I]);
+        }
+        LLVM_DEBUG({
+          dbgs() << "[eh] Split BB into lpad and rest, rest is: ";
+          NewSuccessorBlock->dump();
+          dbgs() << "===============\n";
+          dbgs() << "[eh] lpad is: ";
+          BB->dump();
+          dbgs() << "===============\n";
+        });
+        LPadSuccessors.insert(NewSuccessorBlock);
       }
-      LLVM_DEBUG({
-        dbgs() << "[eh] Split BB into lpad and rest, rest is: ";
-        NewSuccessorBlock->dump();
-        dbgs() << "===============\n";
-        dbgs() << "[eh] lpad is: ";
-        BB->dump();
-        dbgs() << "===============\n";});
-      LPadSuccessors.insert(NewSuccessorBlock);
-    }
+  }
 
   // Find all cold regions.
   for (BasicBlock *BB : RPOT) {
@@ -659,14 +669,17 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
     bool Cold = (BFI && PSI->isColdBlock(BB, BFI)) ||
                 (EnableStaticAnalysis && unlikelyExecuted(*BB, PSI, BFI));
 
-    if (EnableStaticAnalysis && BB->getSinglePredecessor() && BB->getSinglePredecessor()->isEHPad()) {
-      LLVM_DEBUG(dbgs() << "[eh] Block " << BB->getName() << " has EHPad predecessor and marked as cold\n");
+    if (EnableStaticAnalysis && BB->getSinglePredecessor() &&
+        BB->getSinglePredecessor()->isEHPad()) {
+      LLVM_DEBUG(dbgs() << "[eh] Block " << BB->getName()
+                        << " has EHPad predecessor and marked as cold\n");
       Cold = true;
     }
 
     // if BB is a split EH-pad block
     if (LPadSuccessors.find(BB) != LPadSuccessors.end()) {
-      LLVM_DEBUG(dbgs() << "[eh] Found a LPad successor block " << BB->getName() << "\n");
+      LLVM_DEBUG(dbgs() << "[eh] Found a LPad successor block " << BB->getName()
+                        << "\n");
       Cold = true;
     }
 
@@ -796,8 +809,8 @@ bool HotColdSplittingLegacyPass::runOnModule(Module &M) {
   return HotColdSplitting(PSI, GBFI, GTTI, &GetORE, LookupAC).run(M);
 }
 
-PreservedAnalyses
-HotColdSplittingPass::run(Module &M, ModuleAnalysisManager &AM) {
+PreservedAnalyses HotColdSplittingPass::run(Module &M,
+                                            ModuleAnalysisManager &AM) {
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
   auto LookupAC = [&FAM](Function &F) -> AssumptionCache * {

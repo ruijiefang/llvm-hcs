@@ -630,10 +630,15 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
         }
       }      
       Instruction * LPadInst = BB->getLandingPadInst()->getNextNode();
-      BasicBlock * NewSuccessorBlock = BB->splitBasicBlock(LPadInst);
+      BasicBlock * NewSuccessorBlock = SplitBlock(BB, LPadInst, DT.get());
       for(size_t I = 0; I < EHIntrinsicCalls.size(); I++) {
         EHIntrinsicCalls[I]->removeFromParent();
-        BB->getInstList().insertAfter(BB->getInstList().begin(), EHIntrinsicCalls[I]);
+        // Insert eh.typeid.for call after the landingpad instruction.
+        // We split \p BB from the next instruction after the landingpad
+        // instruction, so the landingpad instruction's successor
+        // must be the terminating unconditional branch.
+        Instruction* PreBranchInst = BB->getTerminator()->getPrevNode();
+        BB->getInstList().insertAfter(PreBranchInst->getIterator(), EHIntrinsicCalls[I]);
       }
       LLVM_DEBUG({
         dbgs() << "[eh] Split BB into lpad and rest, rest is: ";

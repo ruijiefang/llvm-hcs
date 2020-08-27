@@ -628,16 +628,19 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
                 EHIntrinsicCalls.push_back(&I);
           }
         }
-      }
+      }      
       Instruction * LPadInst = BB->getLandingPadInst()->getNextNode();
       BasicBlock * NewSuccessorBlock = BB->splitBasicBlock(LPadInst);
       for(size_t I = 0; I < EHIntrinsicCalls.size(); I++) {
         EHIntrinsicCalls[I]->removeFromParent();
-        NewSuccessorBlock->getInstList().insertAfter(NewSuccessorBlock->getInstList().begin(), EHIntrinsicCalls[I]);
+        BB->getInstList().insertAfter(BB->getInstList().begin(), EHIntrinsicCalls[I]);
       }
       LLVM_DEBUG({
         dbgs() << "[eh] Split BB into lpad and rest, rest is: ";
         NewSuccessorBlock->dump();
+        dbgs() << "===============\n";
+        dbgs() << "[eh] lpad is: ";
+        BB->dump();
         dbgs() << "===============\n";});
       LPadSuccessors.insert(NewSuccessorBlock);
     }

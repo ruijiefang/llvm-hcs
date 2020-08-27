@@ -117,8 +117,8 @@ bool blockEndsInUnreachable(const BasicBlock &BB) {
 bool unlikelyExecuted(BasicBlock &BB, ProfileSummaryInfo *PSI,
                       BlockFrequencyInfo *BFI) {
   // Exception handling blocks are unlikely executed.
-  if (BB.isEHPad() || isa<ResumeInst>(BB.getTerminator()))
-    return true;
+  //if (BB.isEHPad() || isa<ResumeInst>(BB.getTerminator()))
+  //  return true;
 
   // The block is cold if it calls/invokes a cold function. However, do not
   // mark sanitizer traps as cold.

@@ -98,6 +98,11 @@ static cl::opt<std::string>
                     cl::desc("Name for the section containing cold functions "
                              "extracted by hot-cold splitting."));
 
+static cl::opt<bool> OutlineEH("hotcoldsplit-outline-eh", cl::init(false),
+                               cl::Hidden, 
+                               cl::desc("Perform outlining for Itanium ABI-based"
+                                        " exception handling blocks."));
+
 namespace {
 // Same as blockEndsInUnreachable in CodeGen/BranchFolding.cpp. Do not modify
 // this function unless you modify the MBB version as well.
@@ -117,8 +122,8 @@ bool blockEndsInUnreachable(const BasicBlock &BB) {
 bool unlikelyExecuted(BasicBlock &BB, ProfileSummaryInfo *PSI,
                       BlockFrequencyInfo *BFI) {
   // Exception handling blocks are unlikely executed.
-  //if (BB.isEHPad() || isa<ResumeInst>(BB.getTerminator()))
-  //  return true;
+  if (!OutlineEH && (BB.isEHPad() || isa<ResumeInst>(BB.getTerminator())))
+    return true;
 
   // The block is cold if it calls/invokes a cold function. However, do not
   // mark sanitizer traps as cold.
@@ -613,7 +618,7 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   // function is WinEH's (CxxFrameHandler3), or we try to do EH outlining.
   // TODO find better way of finding out if function uses WinEH handling
   // or find a way to outling WinEH code.
-  if (F.hasPersonalityFn() && 
+  if (OutlineEH && F.hasPersonalityFn() && 
       !F.getPersonalityFn()->getName().endswith("CxxFrameHandler3")) {
     for (BasicBlock *BB : RPOT)
       if (BB->isEHPad()) {
@@ -670,7 +675,7 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
     bool Cold = (BFI && PSI->isColdBlock(BB, BFI)) ||
                 (EnableStaticAnalysis && unlikelyExecuted(*BB, PSI, BFI));
 
-    if (EnableStaticAnalysis && BB->getSinglePredecessor() &&
+    if (OutlineEH && EnableStaticAnalysis && BB->getSinglePredecessor() &&
         BB->getSinglePredecessor()->isEHPad()) {
       LLVM_DEBUG(dbgs() << "[eh] Block " << BB->getName()
                         << " has EHPad predecessor and marked as cold\n");
@@ -678,7 +683,7 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
     }
 
     // if BB is a split EH-pad block
-    if (LPadSuccessors.find(BB) != LPadSuccessors.end()) {
+    if (OutlineEH && LPadSuccessors.find(BB) != LPadSuccessors.end()) {
       LLVM_DEBUG(dbgs() << "[eh] Found a LPad successor block " << BB->getName()
                         << "\n");
       Cold = true;

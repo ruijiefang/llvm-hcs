@@ -613,7 +613,8 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
   // function is WinEH's (CxxFrameHandler3), or we try to do EH outlining.
   // TODO find better way of finding out if function uses WinEH handling
   // or find a way to outling WinEH code.
-  if (!F.getPersonalityFn()->getName().endswith("CxxFrameHandler3")) {
+  if (F.hasPersonalityFn() && 
+      !F.getPersonalityFn()->getName().endswith("CxxFrameHandler3")) {
     for (BasicBlock *BB : RPOT)
       if (BB->isEHPad()) {
         LLVM_DEBUG({

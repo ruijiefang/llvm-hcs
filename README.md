@@ -1,3 +1,1 @@
-Please go to the wiki for up-to-date information: https://github.com/ruijiefang/llvm-hcs/wiki
-
-For progress tracking: https://github.com/ruijiefang/llvm-hcs/projects/1
+### This project, done during Google Summer of Code 2020, has finished. For a project report, please see https://ruijiefang.github.io/gsoc20-llvm/.

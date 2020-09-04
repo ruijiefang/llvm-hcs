@@ -1,1 +1,1 @@
-### This project, done during Google Summer of Code 2020, has finished. For a project report, please see https://ruijiefang.github.io/gsoc20-llvm/. Code present on other branches of this same repository will be archived.
+### This project, done during Google Summer of Code 2020, has finished. For a project report, please see https://ruijiefang.github.io/gsoc20-llvm/ or https://tr5.org/~ruijie/gsoc20_hcs/index.xhtml. Code present on other branches of this same repository will be archived.
